@@ -1,5 +1,5 @@
-Ultra-Fast Force Fields (UF3)
-=============================
+UF3 Density Development Fork
+============================
 
 |Tests|
 
@@ -12,16 +12,48 @@ All-atom dynamics simulations have become an indispensable quantitative
 tool in physics, chemistry, and materials science, but large systems and
 long simulation times remain challenging due to the trade-off between
 computational efficiency and predictive accuracy. The UF3 framework is
-built to address this challenge by combinining effective two- and
+built to address this challenge by combining effective two- and
 three-body potentials in a cubic B-spline basis with regularized linear
 regression to obtain machine-learning potentials that are physically
 interpretable, sufficiently accurate for applications, and as fast as
 the fastest traditional empirical potentials.
 
-Documentation: https://uf3.readthedocs.io/
+This repository is a development fork of UF3 for testing density-aware
+extensions to the original two-body and three-body B-spline force-field
+form. It keeps the original UF3 package structure while adding
+environment-dependent descriptors and calculators used in our current
+surface-energy studies.
 
-This repository is still under construction. Please feel free to open
-new issues for feature requests and bug reports.
+For the upstream UF3 project and documentation, see:
+
+- Documentation: https://uf3.readthedocs.io/
+- Upstream repository: https://github.com/uf3/uf3
+
+Development Scope
+-----------------
+
+The main additions in this fork are density-modulated interaction terms.
+The current practical focus is the ``2rho`` term, which modulates the
+two-body B-spline contribution by local atomic density channels. The
+repository also contains experimental support for density-modulated
+three-body terms used for ablation tests.
+
+The most relevant files are:
+
+- ``uf3/representation/density.py``: local density evaluation, density
+  channels, and smooth density cutoff functions.
+- ``uf3/representation/bspline.py``: two-body, three-body, ``2rho``,
+  and experimental ``3rho`` B-spline feature construction.
+- ``uf3/representation/process.py``: featurization pipeline integration.
+- ``uf3/regression/least_squares.py``: fitting, feature scaling, and
+  regularization support for the extended feature sets.
+- ``uf3/forcefield/calculator.py``: ASE-compatible calculator support
+  for evaluating trained extended UF3 models.
+
+At present, the extended density terms are intended to be used through
+the Python/ASE calculator path. The LAMMPS plugin included here is kept
+for compatibility with the original UF3 workflow and should not be
+assumed to support the new density-modulated terms.
 
 Setup
 -----
@@ -42,20 +74,26 @@ UF3 can be obtained by cloning the repository and installing it:
 
 .. code:: bash
 
-   git clone https://github.com/uf3/uf3.git
-   cd uf3
+   git clone git@github.com:Kai-Liu-MSE/uf3_develop.git
+   cd uf3_develop
    pip install .
 
 Getting Started
 ---------------
 
-Please see the examples in uf3/examples/tungsten_extxyz for basic usage.
+For original UF3 usage patterns, please refer to the upstream
+documentation and tests. For density-modulated terms, the development
+notes in this repository summarize the design choices and current test
+protocols:
 
-Overviews for individual modules can be found in uf3/examples/modules
-(WIP).
+- ``uf3_density_modulated_terms_notes.md``
+- ``uf3_2rho_term_formula.md``
+- ``uf3_2rho_as_true_mlip_term.md``
+- ``uf3_new_term_ablation_protocol.md``
 
-Standalone scripts and configuration generators/parsers are in
-development.
+This fork intentionally does not include local training datasets,
+large feature files, model checkpoints, or surface-energy calculation
+outputs.
 
 Optional Dependencies
 ---------------------
@@ -100,5 +138,5 @@ Dependencies
 -  We use numpy for array operations.
 
 
-.. |Tests| image:: https://github.com/uf3/uf3/workflows/Tests/badge.svg
-   :target: https://github.com/uf3/uf3/actions
+.. |Tests| image:: https://github.com/Kai-Liu-MSE/uf3_develop/workflows/Tests/badge.svg
+   :target: https://github.com/Kai-Liu-MSE/uf3_develop/actions

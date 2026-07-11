@@ -1,0 +1,66 @@
+# Python/build/cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Local environments
+.venv/
+venv/
+env/
+envs/
+*.conda
+
+# Notebooks/cache
+.ipynb_checkpoints/
+
+# Large/generated scientific data
+*.h5
+*.hdf5
+*.extxyz
+*.xyz
+*.traj
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.ckpt
+*.tar
+*.tar.gz
+*.zip
+
+# Keep small official unit-test fixtures.
+!tests/data/extended_xyz/test.xyz
+!tests/data/singlepoint_fit/df_features_test_singlepoint_fit_from_file.h5
+
+# VASP / electronic-structure heavy or licensed files
+POTCAR*
+WAVECAR*
+CHGCAR*
+CHG*
+AECCAR*
+vasprun.xml
+OUTCAR
+
+# Local experiment/output folders
+Co_PRM_test/
+Co_local_uf3_tuner/
+UF3Tools/
+test_W/
+test_HEA/
+.waylog/
+
+# Secrets
+.env
+*.env
+*token*
+*secret*
+*password*
+*credential*
+MPAPIKey.py

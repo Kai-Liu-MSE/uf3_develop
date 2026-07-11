@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+    paths:
+      - '**.py'
+      - '**.yml'
+      - 'requirements.txt'
+      - '!docs/**'
+  pull_request:
+    paths:
+      - '**.py'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: local-fix
+      run: |
+        # Hack to get setup-python to work on act
+        # (see https://github.com/nektos/act/issues/251)
+        if [ ! -f "/etc/lsb-release" ] ; then
+          echo "DISTRIB_RELEASE=18.04" > /etc/lsb-release
+        fi
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        apt update && apt-get install gcc -y
+        gcc -v
+        python --version
+        pip install -U pip pytest
+        pip install setuptools_scm
+        # temporary pinning of Numpy version until packages work with Numpy v2
+        pip install numpy==1.26.4
+        pip install .
+    - name: Test with pytest
+      run: |
+        pytest

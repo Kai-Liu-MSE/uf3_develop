@@ -1,0 +1,16 @@
+ase
+matplotlib
+ndsplines
+numba
+numpy<=1.26.4
+pandas
+plotly
+PyYAML
+scikit-learn
+scipy
+tables
+tqdm
+elastic
+phonopy>=2.6.0
+seekpath
+spglib

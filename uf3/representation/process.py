@@ -371,6 +371,18 @@ class BasisFeaturizer:
             if self.bspline_config.dipole_modulated_2b_enabled:
                 blocks.append(
                     self.featurize_energy_dipole_modulated_2b(geom, supercell))
+            if self.bspline_config.bond_dipole_modulated_2b_enabled:
+                blocks.append(
+                    self.featurize_energy_bond_dipole_modulated_2b(
+                        geom, supercell))
+            if self.bspline_config.tensor_modulated_2b_enabled:
+                blocks.append(
+                    self.featurize_energy_tensor_modulated_2b(
+                        geom, supercell))
+            if self.bspline_config.bond_tensor_modulated_2b_enabled:
+                blocks.append(
+                    self.featurize_energy_bond_tensor_modulated_2b(
+                        geom, supercell))
             vector_2B = self.featurize_energy_2B(geom, supercell)
             blocks.append(vector_2B)
             if self.degree > 2:
@@ -411,6 +423,18 @@ class BasisFeaturizer:
             if self.bspline_config.dipole_modulated_2b_enabled:
                 blocks.append(
                     self.featurize_force_dipole_modulated_2b(geom, supercell))
+            if self.bspline_config.bond_dipole_modulated_2b_enabled:
+                blocks.append(
+                    self.featurize_force_bond_dipole_modulated_2b(
+                        geom, supercell))
+            if self.bspline_config.tensor_modulated_2b_enabled:
+                blocks.append(
+                    self.featurize_force_tensor_modulated_2b(
+                        geom, supercell))
+            if self.bspline_config.bond_tensor_modulated_2b_enabled:
+                blocks.append(
+                    self.featurize_force_bond_tensor_modulated_2b(
+                        geom, supercell))
             vectors_2B = self.featurize_force_2B(geom, supercell)
             blocks.append(vectors_2B)
             if self.degree > 2:
@@ -464,7 +488,8 @@ class BasisFeaturizer:
             self.bspline_config.density_modulated_2b_rho_bulk_map,
             self.bspline_config.density_modulated_2b_cutoff_on_map,
             self.bspline_config.density_modulated_2b_cutoff_mode,
-            supercell=supercell)
+            supercell=supercell,
+            weight_map=self.bspline_config.density_modulated_2b_weight_map)
 
     def get_density_modulated_3b_state(self, geom, supercell=None):
         """Precompute normalized density state for 3rho features."""
@@ -625,7 +650,8 @@ class BasisFeaturizer:
             n_lead=self.leading_trim[2],
             n_trail=self.trailing_trim[2],
             modulation=self.bspline_config.density_modulated_2b_modulation,
-            density_state=density_state)
+            density_state=density_state,
+            density_weight_map=self.bspline_config.density_modulated_2b_weight_map)
 
     def featurize_force_density_modulated_2b(self, geom, supercell=None,
                                             density_state=None):
@@ -651,7 +677,8 @@ class BasisFeaturizer:
             n_lead=self.leading_trim[2],
             n_trail=self.trailing_trim[2],
             modulation=self.bspline_config.density_modulated_2b_modulation,
-            density_state=density_state)
+            density_state=density_state,
+            density_weight_map=self.bspline_config.density_modulated_2b_weight_map)
 
     def featurize_energy_density_modulated_3b(self, geom, supercell=None,
                                              density_state=None):
@@ -746,6 +773,8 @@ class BasisFeaturizer:
             self.bspline_config.dipole_modulated_2b_r_max_map,
             self.bspline_config.dipole_modulated_2b_power_map,
             self.bspline_config.dipole_modulated_2b_eps_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_mode,
             supercell=supercell,
             n_lead=self.leading_trim[2],
             n_trail=self.trailing_trim[2])
@@ -766,9 +795,151 @@ class BasisFeaturizer:
             self.bspline_config.dipole_modulated_2b_r_max_map,
             self.bspline_config.dipole_modulated_2b_power_map,
             self.bspline_config.dipole_modulated_2b_eps_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_mode,
             supercell=supercell,
             n_lead=self.leading_trim[2],
             n_trail=self.trailing_trim[2])
+
+    def featurize_energy_bond_dipole_modulated_2b(self, geom, supercell=None):
+        """Generate bond-projected dipole-modulated two-body energy features."""
+        if supercell is None:
+            supercell = geom
+        return density.bond_dipole_modulated_pair_values(
+            geom,
+            self.bspline_config.bond_dipole_modulated_2b_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_dipole_modulated_2b_dipole_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_r_min_map,
+            self.bspline_config.bond_dipole_modulated_2b_r_max_map,
+            self.bspline_config.bond_dipole_modulated_2b_power_map,
+            self.bspline_config.bond_dipole_modulated_2b_eps_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.leading_trim[2],
+            n_trail=self.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_dipole_modulated_2b_residualize))
+
+    def featurize_force_bond_dipole_modulated_2b(self, geom, supercell=None):
+        """Generate bond-projected dipole-modulated two-body force features."""
+        if supercell is None:
+            supercell = geom
+        return density.bond_dipole_modulated_pair_force_features(
+            geom,
+            self.bspline_config.bond_dipole_modulated_2b_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_dipole_modulated_2b_dipole_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_r_min_map,
+            self.bspline_config.bond_dipole_modulated_2b_r_max_map,
+            self.bspline_config.bond_dipole_modulated_2b_power_map,
+            self.bspline_config.bond_dipole_modulated_2b_eps_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.leading_trim[2],
+            n_trail=self.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_dipole_modulated_2b_residualize))
+
+    def featurize_energy_tensor_modulated_2b(self, geom, supercell=None):
+        """Generate tensor-anisotropy-modulated two-body energy features."""
+        if supercell is None:
+            supercell = geom
+        return density.tensor_modulated_pair_values(
+            geom,
+            self.bspline_config.tensor_modulated_2b_interactions,
+            self.bspline_config.tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.tensor_modulated_2b_r_min_map,
+            self.bspline_config.tensor_modulated_2b_r_max_map,
+            self.bspline_config.tensor_modulated_2b_power_map,
+            self.bspline_config.tensor_modulated_2b_eps_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.leading_trim[2],
+            n_trail=self.trailing_trim[2])
+
+    def featurize_force_tensor_modulated_2b(self, geom, supercell=None):
+        """Generate tensor-anisotropy-modulated two-body force features."""
+        if supercell is None:
+            supercell = geom
+        return density.tensor_modulated_pair_force_features(
+            geom,
+            self.bspline_config.tensor_modulated_2b_interactions,
+            self.bspline_config.tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.tensor_modulated_2b_r_min_map,
+            self.bspline_config.tensor_modulated_2b_r_max_map,
+            self.bspline_config.tensor_modulated_2b_power_map,
+            self.bspline_config.tensor_modulated_2b_eps_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.leading_trim[2],
+            n_trail=self.trailing_trim[2])
+
+    def featurize_energy_bond_tensor_modulated_2b(self, geom, supercell=None):
+        """Generate bond-projected tensor-modulated two-body energy features."""
+        if supercell is None:
+            supercell = geom
+        return density.bond_tensor_modulated_pair_values(
+            geom,
+            self.bspline_config.bond_tensor_modulated_2b_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_r_min_map,
+            self.bspline_config.bond_tensor_modulated_2b_r_max_map,
+            self.bspline_config.bond_tensor_modulated_2b_power_map,
+            self.bspline_config.bond_tensor_modulated_2b_eps_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.leading_trim[2],
+            n_trail=self.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_tensor_modulated_2b_residualize))
+
+    def featurize_force_bond_tensor_modulated_2b(self, geom, supercell=None):
+        """Generate bond-projected tensor-modulated two-body force features."""
+        if supercell is None:
+            supercell = geom
+        return density.bond_tensor_modulated_pair_force_features(
+            geom,
+            self.bspline_config.bond_tensor_modulated_2b_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_r_min_map,
+            self.bspline_config.bond_tensor_modulated_2b_r_max_map,
+            self.bspline_config.bond_tensor_modulated_2b_power_map,
+            self.bspline_config.bond_tensor_modulated_2b_eps_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.leading_trim[2],
+            n_trail=self.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_tensor_modulated_2b_residualize))
 
     def featurize_energy_2B(self, geom, supercell=None):
         """

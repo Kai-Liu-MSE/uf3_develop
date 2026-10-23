@@ -332,7 +332,8 @@ def compute_direction_cosines(sup_positions: np.ndarray,
                               distance_matrix: np.ndarray,
                               i_where: np.ndarray,
                               j_where: np.ndarray,
-                              n_atoms: int
+                              n_atoms: int,
+                              j_primary: np.ndarray | None = None,
                               ) -> np.ndarray:
     """
     Intermediate function for computing derivatives for forces.
@@ -344,6 +345,8 @@ def compute_direction_cosines(sup_positions: np.ndarray,
         i_where: indices of i-th atom based on distance mask.
         j_where: indices of j-th atom based on distance mask.
         n_atoms: number of atoms in original unit cell.
+        j_primary: optional mapping of each ``j_where`` supercell index to
+            its corresponding original-cell atom index.
 
     Returns:
         drij_dR: np.ndarray of shape (n_atoms, 3, n_distances)
@@ -351,9 +354,11 @@ def compute_direction_cosines(sup_positions: np.ndarray,
             Used to evaluate forces.
     """
     # n_atoms x n_distances
+    if j_primary is None:
+        j_primary = j_where
     kronecker = kronecker_delta(np.arange(n_atoms, dtype=np.int32),
                                 i_where,
-                                j_where)
+                                np.asarray(j_primary, dtype=np.int64))
     # n_distances x 3
     delta_r = sup_positions[j_where, :] - sup_positions[i_where, :]
     # n_distances

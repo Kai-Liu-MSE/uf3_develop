@@ -1,0 +1,1763 @@
+diff --git a/src/ML-UF3/pair_uf3.cpp b/src/ML-UF3/pair_uf3.cpp
+index 8b1155dd6f..3079e06a9e 100644
+--- a/src/ML-UF3/pair_uf3.cpp
++++ b/src/ML-UF3/pair_uf3.cpp
+@@ -32,9 +32,15 @@
+ #include "neigh_list.h"
+ #include "neighbor.h"
+ #include "text_file_reader.h"
++#include "update.h"
+ 
++#include <chrono>
+ #include <cmath>
++#include <fstream>
++#include <iomanip>
+ #include <unordered_map>
++#include <utility>
++#include <vector>
+ 
+ using namespace LAMMPS_NS;
+ using MathConst::THIRD;
+@@ -43,7 +49,10 @@ using MathConst::THIRD;
+ 
+ PairUF3::PairUF3(LAMMPS *lmp) :
+     Pair(lmp), setflag_3b(nullptr), knot_spacing_type_2b(nullptr), knot_spacing_type_3b(nullptr),
+-    cut(nullptr), cut_3b(nullptr), cut_3b_list(nullptr), min_cut_3b(nullptr),
++    setflag_2rho(nullptr),
++    cut(nullptr), cut_2b(nullptr), cut_3b(nullptr), cut_3b_list(nullptr), min_cut_3b(nullptr),
++    rho_2rho_r_min(nullptr), rho_2rho_r_on(nullptr), rho_2rho_r_cut(nullptr),
++    rho_2rho_power(nullptr), rho_2rho_bulk(nullptr), rho_2rho_weight(nullptr),
+     knot_spacing_2b(nullptr), knot_spacing_3b(nullptr), n2b_knots_array(nullptr),
+     n2b_coeff_array(nullptr), n2b_knots_array_size(nullptr), n2b_coeff_array_size(nullptr),
+     cached_constants_2b(nullptr), cached_constants_2b_deri(nullptr), map_3b(nullptr),
+@@ -60,6 +69,36 @@ PairUF3::PairUF3(LAMMPS *lmp) :
+   manybody_flag = 1;
+   bsplines_created = 0;
+   pot_3b = false;
++  has_density_block = false;
++  has_dipole_block = false;
++  has_density_modulated_2b_block = false;
++  debug_2rho_density = false;
++  diagnostic_2rho_energy_tally = false;
++  diagnostic_2rho_force_tally = false;
++  timing_profile_enabled = false;
++  timing_profile_interval = 0;
++  timing_profile_calls = 0;
++  timing_pair_total = 0.0;
++  timing_density_force = 0.0;
++  timing_density_energy = 0.0;
++  timing_dipole_force = 0.0;
++  timing_dipole_energy = 0.0;
++  timing_2rho_force = 0.0;
++  timing_2rho_energy = 0.0;
++  timing_2rho_density = 0.0;
++  timing_2rho_modulated = 0.0;
++  timing_2rho_chain = 0.0;
++  timing_moment_accumulation = 0.0;
++  timing_2p_force = 0.0;
++  timing_2p_energy = 0.0;
++  timing_2d_force = 0.0;
++  timing_2d_energy = 0.0;
++  timing_2q_force = 0.0;
++  timing_2q_energy = 0.0;
++  timing_2a_force = 0.0;
++  timing_2a_energy = 0.0;
++  timing_2b_shortlist = 0.0;
++  timing_3b_triplet = 0.0;
+   nbody_flag = 3;
+   max_num_knots_2b = 0;
+   max_num_coeff_2b = 0;
+@@ -75,8 +114,16 @@ PairUF3::~PairUF3()
+   if (copymode) return;
+   if (allocated) {
+     memory->destroy(setflag);
++    memory->destroy(setflag_2rho);
+     memory->destroy(cutsq);
+     memory->destroy(cut);
++    memory->destroy(cut_2b);
++    memory->destroy(rho_2rho_r_min);
++    memory->destroy(rho_2rho_r_on);
++    memory->destroy(rho_2rho_r_cut);
++    memory->destroy(rho_2rho_power);
++    memory->destroy(rho_2rho_bulk);
++    memory->destroy(rho_2rho_weight);
+     memory->destroy(knot_spacing_type_2b);
+     memory->destroy(knot_spacing_2b);
+     memory->destroy(n2b_knots_array_size);
+@@ -115,11 +162,77 @@ PairUF3::~PairUF3()
+ void PairUF3::settings(int narg, char **arg)
+ {
+ 
+-  if (narg != 1)
++  if ((narg != 1) && (narg != 3) && (narg != 4))
+     error->all(FLERR,
+                "Invalid number of arguments for pair_style uf3"
+                "  Are you using a 2-body or 2 & 3-body UF potential?");
+   nbody_flag = utils::inumeric(FLERR, arg[0], true, lmp);
++  debug_2rho_density = false;
++  diagnostic_2rho_energy_tally = false;
++  diagnostic_2rho_force_tally = false;
++  debug_2rho_density_prefix.clear();
++  timing_profile_enabled = false;
++  timing_profile_file.clear();
++  timing_profile_interval = 0;
++  timing_profile_calls = 0;
++  timing_pair_total = 0.0;
++  timing_density_force = 0.0;
++  timing_density_energy = 0.0;
++  timing_dipole_force = 0.0;
++  timing_dipole_energy = 0.0;
++  timing_2rho_force = 0.0;
++  timing_2rho_energy = 0.0;
++  timing_2rho_density = 0.0;
++  timing_2rho_modulated = 0.0;
++  timing_2rho_chain = 0.0;
++  timing_moment_accumulation = 0.0;
++  timing_2p_force = 0.0;
++  timing_2p_energy = 0.0;
++  timing_2d_force = 0.0;
++  timing_2d_energy = 0.0;
++  timing_2q_force = 0.0;
++  timing_2q_energy = 0.0;
++  timing_2a_force = 0.0;
++  timing_2a_energy = 0.0;
++  timing_2b_shortlist = 0.0;
++  timing_3b_triplet = 0.0;
++  if (narg == 3) {
++    const std::string keyword = arg[1];
++    if ((keyword != "debug_rho") && (keyword != "debug_e2rho") &&
++        (keyword != "debug_e2rho_force"))
++      error->all(FLERR,
++                 "UF3: expected optional keyword debug_rho, debug_e2rho, or debug_e2rho_force");
++    debug_2rho_density = true;
++    diagnostic_2rho_energy_tally =
++        (keyword == "debug_e2rho") || (keyword == "debug_e2rho_force");
++    diagnostic_2rho_force_tally = (keyword == "debug_e2rho_force");
++    debug_2rho_density_prefix = arg[2];
++  } else if (narg == 4) {
++    const std::string keyword = arg[1];
++    if (keyword != "timing")
++      error->all(FLERR, "UF3: expected optional keyword timing");
++    timing_profile_file = arg[2];
++    timing_profile_interval = utils::inumeric(FLERR, arg[3], false, lmp);
++    if (timing_profile_interval <= 0)
++      error->all(FLERR, "UF3: timing interval must be positive");
++    timing_profile_enabled = true;
++    if (comm->me == 0) {
++      std::ofstream output(timing_profile_file);
++      if (!output)
++        error->one(FLERR, "UF3: could not open timing profile file");
++      output << "timestep,compute_calls,rank_max_pair_total_s,"
++             << "rank_max_density_total_s,rank_max_dipole_total_s,"
++             << "rank_max_2rho_force_s,rank_max_2rho_energy_s,"
++             << "rank_max_2rho_density_s,rank_max_2rho_modulated_s,"
++             << "rank_max_2rho_chain_s,"
++             << "rank_max_moment_accumulation_s,"
++             << "rank_max_2p_force_s,rank_max_2p_energy_s,"
++             << "rank_max_2d_force_s,rank_max_2d_energy_s,"
++             << "rank_max_2q_force_s,rank_max_2q_energy_s,"
++             << "rank_max_2A_force_s,rank_max_2A_energy_s,"
++             << "rank_max_2b_shortlist_s,rank_max_3b_triplet_s\n";
++    }
++  }
+   if (nbody_flag == 2) {
+     pot_3b = false;
+     manybody_flag = 0;
+@@ -130,6 +243,66 @@ void PairUF3::settings(int narg, char **arg)
+     error->all(FLERR, "Pair style uf3 not (yet) implemented for {}-body terms", nbody_flag);
+ }
+ 
++/* ---------------------------------------------------------------------- */
++
++void PairUF3::write_timing_profile()
++{
++  double local[19] = {
++      timing_pair_total,
++      timing_density_force,
++      timing_dipole_force,
++      timing_2rho_force,
++      timing_2rho_energy,
++      timing_2rho_density,
++      timing_2rho_modulated,
++      timing_2rho_chain,
++      timing_moment_accumulation,
++      timing_2p_force,
++      timing_2p_energy,
++      timing_2d_force,
++      timing_2d_energy,
++      timing_2q_force,
++      timing_2q_energy,
++      timing_2a_force,
++      timing_2a_energy,
++      timing_2b_shortlist,
++      timing_3b_triplet,
++  };
++  double rank_max[19] = {0.0};
++  MPI_Reduce(local, rank_max, 19, MPI_DOUBLE, MPI_MAX, 0, world);
++
++  if (comm->me == 0) {
++    std::ofstream output(timing_profile_file, std::ios::app);
++    if (!output)
++      error->one(FLERR, "UF3: could not append to timing profile file");
++    output << update->ntimestep << ',' << timing_profile_calls;
++    for (double value : rank_max) output << ',' << std::setprecision(16) << value;
++    output << '\n';
++  }
++
++  timing_pair_total = 0.0;
++  timing_density_force = 0.0;
++  timing_density_energy = 0.0;
++  timing_dipole_force = 0.0;
++  timing_dipole_energy = 0.0;
++  timing_2rho_force = 0.0;
++  timing_2rho_energy = 0.0;
++  timing_2rho_density = 0.0;
++  timing_2rho_modulated = 0.0;
++  timing_2rho_chain = 0.0;
++  timing_moment_accumulation = 0.0;
++  timing_2p_force = 0.0;
++  timing_2p_energy = 0.0;
++  timing_2d_force = 0.0;
++  timing_2d_energy = 0.0;
++  timing_2q_force = 0.0;
++  timing_2q_energy = 0.0;
++  timing_2a_force = 0.0;
++  timing_2a_energy = 0.0;
++  timing_2b_shortlist = 0.0;
++  timing_3b_triplet = 0.0;
++}
++
+ /* ----------------------------------------------------------------------
+  *    set coeffs for one or more type pairs
+  * ---------------------------------------------------------------------- */
+@@ -155,6 +328,8 @@ void PairUF3::allocate()
+ 
+   // Contains info about wether UF potential were found for type i and j
+   memory->create(setflag, num_of_elements + 1, num_of_elements + 1, "pair:setflag");
++  memory->create(setflag_2rho, num_of_elements + 1, num_of_elements + 1,
++                 "pair:setflag_2rho");
+ 
+   // Contains info about 2-body cutoff distance for type i and j
+   // cutsq is the global variable
+@@ -163,6 +338,19 @@ void PairUF3::allocate()
+   memory->create(cutsq, num_of_elements + 1, num_of_elements + 1, "pair:cutsq");
+   // cut is specific to this pair style. We will set the values in cut
+   memory->create(cut, num_of_elements + 1, num_of_elements + 1, "pair:cut");
++  memory->create(cut_2b, num_of_elements + 1, num_of_elements + 1, "pair:cut_2b");
++  memory->create(rho_2rho_r_min, num_of_elements + 1, num_of_elements + 1,
++                 "pair:rho_2rho_r_min");
++  memory->create(rho_2rho_r_on, num_of_elements + 1, num_of_elements + 1,
++                 "pair:rho_2rho_r_on");
++  memory->create(rho_2rho_r_cut, num_of_elements + 1, num_of_elements + 1,
++                 "pair:rho_2rho_r_cut");
++  memory->create(rho_2rho_power, num_of_elements + 1, num_of_elements + 1,
++                 "pair:rho_2rho_power");
++  memory->create(rho_2rho_bulk, num_of_elements + 1, num_of_elements + 1,
++                 "pair:rho_2rho_bulk");
++  memory->create(rho_2rho_weight, num_of_elements + 1, num_of_elements + 1,
++                 "pair:rho_2rho_weight");
+   //Contains info about type of knot_spacing--> 0 = uniform knot spacing (default)
+   //1 = non-uniform knot spacing
+   memory->create(knot_spacing_type_2b, num_of_elements + 1, num_of_elements + 1,
+@@ -175,6 +363,25 @@ void PairUF3::allocate()
+   memory->create(n2b_coeff_array_size, num_of_elements + 1, num_of_elements + 1,
+                  "pair:n2b_coeff_array_size");
+ 
++  for (int i = 1; i < num_of_elements + 1; i++) {
++    for (int j = 1; j < num_of_elements + 1; j++) {
++      setflag[i][j] = 0;
++      setflag_2rho[i][j] = 0;
++      cut[i][j] = 0.0;
++      cut_2b[i][j] = 0.0;
++      rho_2rho_r_min[i][j] = 0.0;
++      rho_2rho_r_on[i][j] = 0.0;
++      rho_2rho_r_cut[i][j] = 0.0;
++      rho_2rho_power[i][j] = 0.0;
++      rho_2rho_bulk[i][j] = 0.0;
++      rho_2rho_weight[i][j] = 1.0;
++      n2b_coeff_array_size[i][j] = 0;
++      n2b_knots_array_size[i][j] = 0;
++      knot_spacing_type_2b[i][j] = 0;
++      knot_spacing_2b[i][j] = 0.0;
++    }
++  }
++
+   if (pot_3b) {
+     // Contains info about wether UF potential were found for type i, j and k
+     memory->create(setflag_3b, num_of_elements + 1, num_of_elements + 1, num_of_elements + 1,
+@@ -204,9 +411,6 @@ void PairUF3::allocate()
+     for (int i = 1; i < num_of_elements + 1; i++) {
+       for (int j = 1; j < num_of_elements + 1; j++) {
+         cut_3b_list[i][j] = 0;
+-        setflag[i][j] = 0;
+-        n2b_coeff_array_size[i][j] = 0;
+-        n2b_knots_array_size[i][j] = 0;
+ 
+         for (int k = 1; k < num_of_elements + 1; k++) {
+           cut_3b[i][j][k] = 0;
+@@ -264,6 +468,13 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+   //if 2B read the knot vector and coeff vector size
+   //if 3B read the knot vectors and coeff matrix size
+   int line_counter = 1;
++  has_density_block = false;
++  has_dipole_block = false;
++  has_density_modulated_2b_block = false;
++  density_terms.clear();
++  dipole_terms.clear();
++  rho_2rho_alphas.clear();
++  density_modulated_2b_terms.clear();
+   char *line;
+   while ((line = txtfilereader.next_line(1))) {
+     Tokenizer line_token(line);
+@@ -296,12 +507,14 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+         int itype = 0;
+         int jtype = 0;
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element1) {
+             itype = i;
+             break;
+           }
+         }
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element2) {
+             jtype = i;
+             break;
+@@ -333,8 +546,10 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+ 
+           //cut is used in init_one which is called by pair.cpp at line 267
+           //where the return of init_one is squared
+-          cut[itype][jtype] = fp3rd_line.next_double();
+-          cut[jtype][itype] = cut[itype][jtype];
++          cut_2b[itype][jtype] = fp3rd_line.next_double();
++          cut_2b[jtype][itype] = cut_2b[itype][jtype];
++          cut[itype][jtype] = cut_2b[itype][jtype];
++          cut[jtype][itype] = cut_2b[itype][jtype];
+ 
+           int num_knots_2b = fp3rd_line.next_int();
+           n2b_knots_array_size[itype][jtype] = num_knots_2b;
+@@ -360,6 +575,201 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+           n2b_coeff_array_size[jtype][itype] = num_coeff_2b;
+           max_num_coeff_2b = std::max(max_num_coeff_2b, num_coeff_2b);
+         }
++      } else if ((nbody_on_file == "DENSITY") || (nbody_on_file == "DIPOLE")) {
++        if (fp2nd_line.count() != 3)
++          error->all(FLERR,
++                     "UF3: Expected 3 words in a {} header on line {} of {} file, "
++                     "but found {} word/s",
++                     nbody_on_file, line_counter, potf_name, fp2nd_line.count());
++
++        std::string center_element = fp2nd_line.next_string();
++        std::string neighbor_element = fp2nd_line.next_string();
++        if (center_element.empty() || neighbor_element.empty())
++          error->all(FLERR, "UF3: Invalid center or neighbor in {} block", nbody_on_file);
++
++        temp_line = txtfilereader.next_line(4);
++        line_counter++;
++        ValueTokenizer metadata_line(temp_line);
++        if (metadata_line.count() != 4)
++          error->all(FLERR,
++                     "UF3: {} metadata line must contain r_min, r_cut, power, and coefficient",
++                     nbody_on_file);
++        const double r_min = metadata_line.next_double();
++        const double r_cut = metadata_line.next_double();
++        const double power = metadata_line.next_double();
++        const double coefficient = metadata_line.next_double();
++        if (r_min < 0.0 || r_cut <= r_min || power < 0.0)
++          error->all(FLERR, "UF3: Invalid metadata in {} block", nbody_on_file);
++
++        for (int itype = 1; itype < num_of_elements + 1; itype++) {
++          if (map[itype] < 0 || std::string(elements[map[itype]]) != center_element) continue;
++          for (int jtype = 1; jtype < num_of_elements + 1; jtype++) {
++            if (map[jtype] < 0 || std::string(elements[map[jtype]]) != neighbor_element) continue;
++            cut[itype][jtype] = std::max(cut[itype][jtype], r_cut);
++            cut[jtype][itype] = std::max(cut[jtype][itype], r_cut);
++            if (nbody_on_file == "DENSITY") {
++              ScalarDensityTerm term;
++              term.center_type = itype;
++              term.neighbor_type = jtype;
++              term.r_min = r_min;
++              term.r_cut = r_cut;
++              term.power = power;
++              term.coefficient = coefficient;
++              density_terms.push_back(term);
++              has_density_block = true;
++            } else {
++              DipoleTerm term;
++              term.center_type = itype;
++              term.neighbor_type = jtype;
++              term.r_min = r_min;
++              term.r_cut = r_cut;
++              term.power = power;
++              term.coefficient = coefficient;
++              dipole_terms.push_back(term);
++              has_dipole_block = true;
++            }
++          }
++        }
++      } else if (nbody_on_file == "2RHO") {
++        // One block describes one center-neighbor orientation of a 2rho term.
++        if (fp2nd_line.count() != 7)
++          error->all(FLERR,
++                     "UF3: Expected 7 words in a 2RHO header on line {} of {} file, "
++                     "but found {} word/s",
++                     line_counter, potf_name, fp2nd_line.count());
++
++        std::string center_element = fp2nd_line.next_string();
++        std::string neighbor_element = fp2nd_line.next_string();
++        double alpha = fp2nd_line.next_double();
++        int leading_trim = fp2nd_line.next_int();
++        int trailing_trim = fp2nd_line.next_int();
++        std::string knot_type = fp2nd_line.next_string();
++        if (center_element.empty() || neighbor_element.empty() || alpha <= 0.0)
++          error->all(FLERR, "UF3: Invalid center, neighbor, or alpha in 2RHO block");
++        bool known_alpha = false;
++        for (double existing_alpha : rho_2rho_alphas) {
++          if (std::abs(existing_alpha - alpha) < 1.0e-12) {
++            known_alpha = true;
++            break;
++          }
++        }
++        if (!known_alpha) rho_2rho_alphas.push_back(alpha);
++        if (leading_trim != 0 || trailing_trim != 3)
++          error->all(FLERR,
++                     "UF3: 2RHO currently requires leading_trim=0 and trailing_trim=3");
++        if ((knot_type != "uk") && (knot_type != "nk"))
++          error->all(FLERR, "UF3: 2RHO knot type must be either uk or nk");
++
++        temp_line = txtfilereader.next_line(2);
++        line_counter++;
++        ValueTokenizer pair_line(temp_line);
++        if (pair_line.count() != 2)
++          error->all(FLERR,
++                     "UF3: 2RHO pair-spline line must contain cutoff and knot count");
++        double pair_cutoff = pair_line.next_double();
++        int num_knots = pair_line.next_int();
++        if (pair_cutoff <= 0.0 || num_knots < 5)
++          error->all(FLERR, "UF3: Invalid pair cutoff or knot count in 2RHO block");
++
++        temp_line = txtfilereader.next_line(num_knots);
++        line_counter++;
++        ValueTokenizer knot_line(temp_line);
++        if (knot_line.count() != num_knots)
++          error->all(FLERR,
++                     "UF3: 2RHO expected {} pair knots but found {}",
++                     num_knots, knot_line.count());
++        std::vector<double> pair_knots(num_knots);
++        for (int knot = 0; knot < num_knots; knot++)
++          pair_knots[knot] = knot_line.next_double();
++
++        temp_line = txtfilereader.next_line(0);
++        line_counter++;
++        ValueTokenizer density_line(temp_line);
++        const int density_fields = density_line.count();
++        if (density_fields != 7 && density_fields != 8)
++          error->all(FLERR,
++                     "UF3: 2RHO density line must contain 7 or 8 fields");
++        double density_r_min = density_line.next_double();
++        double density_r_on = density_line.next_double();
++        double density_r_cut = density_line.next_double();
++        double density_power = density_line.next_double();
++        double rho_bulk = density_line.next_double();
++        double density_weight = density_fields == 8 ? density_line.next_double() : 1.0;
++        std::string cutoff_mode = density_line.next_string();
++        std::string modulation = density_line.next_string();
++        if (density_r_min < 0.0 || density_r_on <= density_r_min ||
++            density_r_cut <= density_r_on || density_power < 0.0 || rho_bulk <= 0.0 ||
++            !std::isfinite(density_weight) || density_weight < 0.0)
++          error->all(FLERR, "UF3: Invalid density metadata in 2RHO block");
++        if (cutoff_mode != "quintic")
++          error->all(FLERR, "UF3: M2 supports only quintic 2RHO density cutoffs");
++        if (modulation != "conservative")
++          error->all(FLERR, "UF3: M2 supports only conservative 2RHO modulation");
++
++        temp_line = txtfilereader.next_line(1);
++        line_counter++;
++        ValueTokenizer coefficient_count_line(temp_line);
++        if (coefficient_count_line.count() != 1)
++          error->all(FLERR, "UF3: 2RHO coefficient-count line must contain one integer");
++        int num_coefficients = coefficient_count_line.next_int();
++        if (num_coefficients <= 0 || num_knots != num_coefficients + 4)
++          error->all(FLERR,
++                     "UF3: 2RHO requires n_knots = n_coefficients + 4");
++
++        temp_line = txtfilereader.next_line(num_coefficients);
++        line_counter++;
++        ValueTokenizer coefficient_line(temp_line);
++        if (coefficient_line.count() != num_coefficients)
++          error->all(FLERR,
++                     "UF3: 2RHO expected {} coefficients but found {}",
++                     num_coefficients, coefficient_line.count());
++        std::vector<double> coefficients(num_coefficients);
++        for (int coefficient = 0; coefficient < num_coefficients; coefficient++)
++          coefficients[coefficient] = coefficient_line.next_double();
++
++        int itype = 0;
++        int jtype = 0;
++        for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
++          if (std::string(elements[map[i]]) == center_element) {
++            itype = i;
++            break;
++          }
++        }
++        for (int j = 1; j < num_of_elements + 1; j++) {
++          if (map[j] < 0) continue;
++          if (std::string(elements[map[j]]) == neighbor_element) {
++            jtype = j;
++            break;
++          }
++        }
++        if ((itype != 0) && (jtype != 0)) {
++          if (setflag_2rho[itype][jtype] == 1 &&
++              (rho_2rho_r_min[itype][jtype] != density_r_min ||
++               rho_2rho_r_on[itype][jtype] != density_r_on ||
++               rho_2rho_r_cut[itype][jtype] != density_r_cut ||
++               rho_2rho_power[itype][jtype] != density_power ||
++               rho_2rho_bulk[itype][jtype] != rho_bulk ||
++               rho_2rho_weight[itype][jtype] != density_weight))
++            error->all(FLERR,
++                       "UF3: 2RHO blocks for one center-neighbor pair have inconsistent density metadata");
++          setflag_2rho[itype][jtype] = 1;
++          rho_2rho_r_min[itype][jtype] = density_r_min;
++          rho_2rho_r_on[itype][jtype] = density_r_on;
++          rho_2rho_r_cut[itype][jtype] = density_r_cut;
++          rho_2rho_power[itype][jtype] = density_power;
++          rho_2rho_bulk[itype][jtype] = rho_bulk;
++          rho_2rho_weight[itype][jtype] = density_weight;
++          cut[itype][jtype] = std::max(cut[itype][jtype], density_r_cut);
++          DensityModulated2bTerm term;
++          term.center_type = itype;
++          term.neighbor_type = jtype;
++          term.alpha = alpha;
++          term.knots = std::move(pair_knots);
++          term.coefficients = std::move(coefficients);
++          density_modulated_2b_terms.push_back(std::move(term));
++        }
++        has_density_modulated_2b_block = true;
+       } else if ((nbody_on_file == "3B") && (pot_3b)) {
+         //3B block
+         if (fp2nd_line.count() != 7)
+@@ -377,18 +787,21 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+           int jtype = 0;
+           int ktype = 0;
+           for (int i = 1; i < num_of_elements + 1; i++) {
++            if (map[i] < 0) continue;
+             if (std::string(elements[map[i]]) == element1) {
+               itype = i;
+               break;
+             }
+           }
+           for (int i = 1; i < num_of_elements + 1; i++) {
++            if (map[i] < 0) continue;
+             if (std::string(elements[map[i]]) == element2) {
+               jtype = i;
+               break;
+             }
+           }
+           for (int i = 1; i < num_of_elements + 1; i++) {
++            if (map[i] < 0) continue;
+             if (std::string(elements[map[i]]) == element3) {
+               ktype = i;
+               break;
+@@ -496,7 +909,9 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+         }
+       } else {
+         if (!((nbody_on_file == "3B") && (!pot_3b)))
+-          error->all(FLERR, "UF3: Expected either '2B' or '3B' word on line {} of {} file",
++          error->all(FLERR,
++                     "UF3: Expected '2B', '3B', 'DENSITY', 'DIPOLE', or '2RHO' "
++                     "word on line {} of {} file",
+                      line_counter, potf_name);
+       }
+     }    //if of #UF3 POT
+@@ -566,36 +981,38 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+         int itype = 0;
+         int jtype = 0;
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element1) {
+             itype = i;
+             break;
+           }
+         }
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element2) {
+             jtype = i;
+             break;
+           }
+         }
+ 
+-        //skip the next two tokens
+-        fp2nd_line.skip(2);
+-
+-        //uk or nk?
+-        std::string knot_type = fp2nd_line.next_string();
+-        if (knot_type == "uk") {
+-          knot_spacing_type_2b[itype][jtype] = 0;
+-          knot_spacing_type_2b[jtype][itype] = 0;
+-        } else if (knot_type == "nk") {
+-          knot_spacing_type_2b[itype][jtype] = 1;
+-          knot_spacing_type_2b[jtype][itype] = 1;
+-        } else
+-          error->all(FLERR,
+-                     "UF3: Expected either 'uk'(uniform-knots) or 'nk'(non-uniform knots). "
+-                     "Found {} on the 2nd line of {}-{} interaction block",
+-                     knot_type, element1, element2);
+-
+         if ((itype != 0) && (jtype != 0)) {
++          //skip the next two tokens
++          fp2nd_line.skip(2);
++
++          //uk or nk?
++          std::string knot_type = fp2nd_line.next_string();
++          if (knot_type == "uk") {
++            knot_spacing_type_2b[itype][jtype] = 0;
++            knot_spacing_type_2b[jtype][itype] = 0;
++          } else if (knot_type == "nk") {
++            knot_spacing_type_2b[itype][jtype] = 1;
++            knot_spacing_type_2b[jtype][itype] = 1;
++          } else
++            error->all(FLERR,
++                       "UF3: Expected either 'uk'(uniform-knots) or 'nk'(non-uniform knots). "
++                       "Found {} on the 2nd line of {}-{} interaction block",
++                       knot_type, element1, element2);
++
+           //skip line containing info of cutoff and knot vect size
+           txtfilereader.skip_line();
+ 
+@@ -658,42 +1075,45 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+         int jtype = 0;
+         int ktype = 0;
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element1) {
+             itype = i;
+             break;
+           }
+         }
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element2) {
+             jtype = i;
+             break;
+           }
+         }
+         for (int i = 1; i < num_of_elements + 1; i++) {
++          if (map[i] < 0) continue;
+           if (std::string(elements[map[i]]) == element3) {
+             ktype = i;
+             break;
+           }
+         }
+ 
+-        //skip the next two tokens
+-        fp2nd_line.skip(2);
+-
+-        //uk or nk?
+-        std::string knot_type = fp2nd_line.next_string();
+-        if (knot_type == "uk") {
+-          knot_spacing_type_3b[itype][jtype][ktype] = 0;
+-          knot_spacing_type_3b[itype][ktype][jtype] = 0;
+-        } else if (knot_type == "nk") {
+-          knot_spacing_type_3b[itype][jtype][ktype] = 1;
+-          knot_spacing_type_3b[itype][ktype][jtype] = 1;
+-        } else
+-          error->all(FLERR,
+-                     "UF3: Expected either 'uk'(uniform-knots) or 'nk'(non-uniform knots) "
+-                     "Found {} on the 2nd line of {}-{}-{} interaction block",
+-                     knot_type, element1, element2, element3);
+-
+         if ((itype != 0) && (jtype != 0) && (ktype != 0)) {
++          //skip the next two tokens
++          fp2nd_line.skip(2);
++
++          //uk or nk?
++          std::string knot_type = fp2nd_line.next_string();
++          if (knot_type == "uk") {
++            knot_spacing_type_3b[itype][jtype][ktype] = 0;
++            knot_spacing_type_3b[itype][ktype][jtype] = 0;
++          } else if (knot_type == "nk") {
++            knot_spacing_type_3b[itype][jtype][ktype] = 1;
++            knot_spacing_type_3b[itype][ktype][jtype] = 1;
++          } else
++            error->all(FLERR,
++                       "UF3: Expected either 'uk'(uniform-knots) or 'nk'(non-uniform knots) "
++                       "Found {} on the 2nd line of {}-{}-{} interaction block",
++                       knot_type, element1, element2, element3);
++
+           //skip line containing info of cutoffs and knot vector sizes
+           txtfilereader.skip_line();
+ 
+@@ -841,6 +1261,10 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+   //Set interaction of atom types of the same elements
+   for (int i = 1; i < num_of_elements + 1; i++) {
+     for (int j = 1; j < num_of_elements + 1; j++) {
++      if ((map[i] < 0) || (map[j] < 0)) {
++        cut[i][j] = 0.0;
++        continue;
++      }
+       if (setflag[i][j] != 1) {
+         //i-j interaction not set
+ 
+@@ -879,6 +1303,13 @@ void PairUF3::uf3_read_unified_pot_file(char *potf_name)
+       for (int j = 1; j < num_of_elements + 1; j++) {
+         //for (int k = j; k < num_of_elements + 1; k++) {
+         for (int k = 1; k < num_of_elements + 1; k++) {
++          if ((map[i] < 0) || (map[j] < 0) || (map[k] < 0)) {
++            cut_3b[i][j][k] = 0.0;
++            min_cut_3b[i][j][k][0] = 0.0;
++            min_cut_3b[i][j][k][1] = 0.0;
++            min_cut_3b[i][j][k][2] = 0.0;
++            continue;
++          }
+           if (setflag_3b[i][j][k] != 1) {
+             //i-j-k interaction not set
+ 
+@@ -955,6 +1386,7 @@ void PairUF3::communicate()
+ {
+   const int num_of_elements = atom->ntypes;
+   MPI_Bcast(&cut[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0, world);
++  MPI_Bcast(&cut_2b[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0, world);
+ 
+   MPI_Bcast(&n2b_knots_array_size[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_INT, 0,
+             world);
+@@ -964,6 +1396,113 @@ void PairUF3::communicate()
+   MPI_Bcast(&max_num_knots_2b, 1, MPI_INT, 0, world);
+   MPI_Bcast(&max_num_coeff_2b, 1, MPI_INT, 0, world);
+ 
++  int has_direct_density = has_density_block ? 1 : 0;
++  MPI_Bcast(&has_direct_density, 1, MPI_INT, 0, world);
++  has_density_block = (has_direct_density != 0);
++  int num_density_terms = static_cast<int>(density_terms.size());
++  MPI_Bcast(&num_density_terms, 1, MPI_INT, 0, world);
++  if (comm->me != 0) density_terms.resize(num_density_terms);
++  for (int term_index = 0; term_index < num_density_terms; term_index++) {
++    auto &term = density_terms[term_index];
++    int types[2];
++    double values[4];
++    if (comm->me == 0) {
++      types[0] = term.center_type;
++      types[1] = term.neighbor_type;
++      values[0] = term.r_min;
++      values[1] = term.r_cut;
++      values[2] = term.power;
++      values[3] = term.coefficient;
++    }
++    MPI_Bcast(types, 2, MPI_INT, 0, world);
++    MPI_Bcast(values, 4, MPI_DOUBLE, 0, world);
++    if (comm->me != 0) {
++      term.center_type = types[0];
++      term.neighbor_type = types[1];
++      term.r_min = values[0];
++      term.r_cut = values[1];
++      term.power = values[2];
++      term.coefficient = values[3];
++    }
++  }
++
++  int has_direct_dipole = has_dipole_block ? 1 : 0;
++  MPI_Bcast(&has_direct_dipole, 1, MPI_INT, 0, world);
++  has_dipole_block = (has_direct_dipole != 0);
++  int num_dipole_terms = static_cast<int>(dipole_terms.size());
++  MPI_Bcast(&num_dipole_terms, 1, MPI_INT, 0, world);
++  if (comm->me != 0) dipole_terms.resize(num_dipole_terms);
++  for (int term_index = 0; term_index < num_dipole_terms; term_index++) {
++    auto &term = dipole_terms[term_index];
++    int types[2];
++    double values[4];
++    if (comm->me == 0) {
++      types[0] = term.center_type;
++      types[1] = term.neighbor_type;
++      values[0] = term.r_min;
++      values[1] = term.r_cut;
++      values[2] = term.power;
++      values[3] = term.coefficient;
++    }
++    MPI_Bcast(types, 2, MPI_INT, 0, world);
++    MPI_Bcast(values, 4, MPI_DOUBLE, 0, world);
++    if (comm->me != 0) {
++      term.center_type = types[0];
++      term.neighbor_type = types[1];
++      term.r_min = values[0];
++      term.r_cut = values[1];
++      term.power = values[2];
++      term.coefficient = values[3];
++    }
++  }
++
++  MPI_Bcast(&setflag_2rho[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_INT, 0,
++            world);
++  MPI_Bcast(&rho_2rho_r_min[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
++            world);
++  MPI_Bcast(&rho_2rho_r_on[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
++            world);
++  MPI_Bcast(&rho_2rho_r_cut[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
++            world);
++  MPI_Bcast(&rho_2rho_power[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
++            world);
++  MPI_Bcast(&rho_2rho_bulk[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
++            world);
++  MPI_Bcast(&rho_2rho_weight[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
++            world);
++  int has_2rho_block = has_density_modulated_2b_block ? 1 : 0;
++  MPI_Bcast(&has_2rho_block, 1, MPI_INT, 0, world);
++  has_density_modulated_2b_block = (has_2rho_block != 0);
++  int num_2rho_alphas = static_cast<int>(rho_2rho_alphas.size());
++  MPI_Bcast(&num_2rho_alphas, 1, MPI_INT, 0, world);
++  if (comm->me != 0) rho_2rho_alphas.resize(num_2rho_alphas);
++  if (num_2rho_alphas > 0)
++    MPI_Bcast(rho_2rho_alphas.data(), num_2rho_alphas, MPI_DOUBLE, 0, world);
++  int num_2rho_terms = static_cast<int>(density_modulated_2b_terms.size());
++  MPI_Bcast(&num_2rho_terms, 1, MPI_INT, 0, world);
++  if (comm->me != 0) density_modulated_2b_terms.resize(num_2rho_terms);
++  for (int term_index = 0; term_index < num_2rho_terms; term_index++) {
++    auto &term = density_modulated_2b_terms[term_index];
++    int metadata[3];
++    if (comm->me == 0) {
++      metadata[0] = term.center_type;
++      metadata[1] = term.neighbor_type;
++      metadata[2] = static_cast<int>(term.coefficients.size());
++    }
++    MPI_Bcast(metadata, 3, MPI_INT, 0, world);
++    if (comm->me != 0) {
++      term.center_type = metadata[0];
++      term.neighbor_type = metadata[1];
++      term.coefficients.resize(metadata[2]);
++      term.knots.resize(metadata[2] + 4);
++    }
++    MPI_Bcast(&term.alpha, 1, MPI_DOUBLE, 0, world);
++    if (metadata[2] > 0) {
++      MPI_Bcast(term.knots.data(), metadata[2] + 4, MPI_DOUBLE, 0, world);
++      MPI_Bcast(term.coefficients.data(), metadata[2], MPI_DOUBLE, 0, world);
++    }
++  }
++
+   if (pot_3b) {
+     MPI_Bcast(&cut_3b_list[0][0], (num_of_elements + 1) * (num_of_elements + 1), MPI_DOUBLE, 0,
+               world);
+@@ -1053,6 +1592,480 @@ void PairUF3::init_list(int /*id*/, class NeighList *ptr)
+   list = ptr;
+ }
+ 
++int PairUF3::get_2rho_knot_start_index(const DensityModulated2bTerm &term, double r) const
++{
++  const int n_coefficients = static_cast<int>(term.coefficients.size());
++  if (term.uniform_knots) {
++    int index = 3 + static_cast<int>((r - term.knots[3]) / term.knot_spacing);
++    if (index < 3) index = 3;
++    if (index > n_coefficients - 1) index = n_coefficients - 1;
++    return index;
++  }
++
++  for (int knot = 3; knot < n_coefficients + 3; ++knot) {
++    if ((term.knots[knot] <= r) && (r < term.knots[knot + 1])) return knot;
++  }
++  return n_coefficients - 1;
++}
++
++double PairUF3::evaluate_2rho_cubic_spline(const DensityModulated2bTerm &term, double r) const
++{
++  const int n_coefficients = static_cast<int>(term.coefficients.size());
++  if (n_coefficients <= 0 || term.knots.size() != term.coefficients.size() + 4) return 0.0;
++  if (static_cast<int>(term.spline_constants.size()) != n_coefficients) return 0.0;
++  if (r <= term.knots[3] || r >= term.knots[n_coefficients]) return 0.0;
++
++  const int knot_start_index = get_2rho_knot_start_index(term, r);
++
++  const double rsq = r * r;
++  const double rth = rsq * r;
++  const auto &basis_0 = term.spline_constants[knot_start_index];
++  const auto &basis_1 = term.spline_constants[knot_start_index - 1];
++  const auto &basis_2 = term.spline_constants[knot_start_index - 2];
++  const auto &basis_3 = term.spline_constants[knot_start_index - 3];
++  return rth * basis_0[3] + rsq * basis_0[2] + r * basis_0[1] + basis_0[0] +
++      rth * basis_1[7] + rsq * basis_1[6] + r * basis_1[5] + basis_1[4] +
++      rth * basis_2[11] + rsq * basis_2[10] + r * basis_2[9] + basis_2[8] +
++      rth * basis_3[15] + rsq * basis_3[14] + r * basis_3[13] + basis_3[12];
++}
++
++double PairUF3::evaluate_2rho_cubic_spline_derivative(const DensityModulated2bTerm &term,
++                                                       double r) const
++{
++  const int n_coefficients = static_cast<int>(term.coefficients.size());
++  if (n_coefficients < 2 || term.knots.size() != term.coefficients.size() + 4) return 0.0;
++  if (static_cast<int>(term.derivative_constants.size()) != n_coefficients - 1) return 0.0;
++  if (r <= term.knots[3] || r >= term.knots[n_coefficients]) return 0.0;
++
++  const int knot_start_index = get_2rho_knot_start_index(term, r);
++
++  const double rsq = r * r;
++  const int first_derivative_index = knot_start_index - 1;
++  const auto &basis_0 = term.derivative_constants[first_derivative_index];
++  const auto &basis_1 = term.derivative_constants[first_derivative_index - 1];
++  const auto &basis_2 = term.derivative_constants[first_derivative_index - 2];
++  return rsq * basis_0[2] + r * basis_0[1] + basis_0[0] +
++      rsq * basis_1[5] + r * basis_1[4] + basis_1[3] +
++      rsq * basis_2[8] + r * basis_2[7] + basis_2[6];
++}
++
++double PairUF3::evaluate_2rho_center_energy(int i) const
++{
++  const int itype = atom->type[i];
++  if (map[itype] < 0) return 0.0;
++
++  double rho = 0.0;
++  double rho_bulk = 0.0;
++  double **x = atom->x;
++  int *type = atom->type;
++  int *jlist = list->firstneigh[i];
++  const int jnum = list->numneigh[i];
++  for (int jj = 0; jj < jnum; jj++) {
++    const int j = jlist[jj] & NEIGHMASK;
++    const int jtype = type[j];
++    if ((map[jtype] < 0) || (setflag_2rho[itype][jtype] == 0)) continue;
++    const double delx = x[i][0] - x[j][0];
++    const double dely = x[i][1] - x[j][1];
++    const double delz = x[i][2] - x[j][2];
++    const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++    const double r_min = rho_2rho_r_min[itype][jtype];
++    const double r_on = rho_2rho_r_on[itype][jtype];
++    const double r_cut = rho_2rho_r_cut[itype][jtype];
++    if ((rij <= r_min) || (rij >= r_cut)) continue;
++    double envelope = 1.0;
++    if (rij > r_on) {
++      const double t = (rij - r_on) / (r_cut - r_on);
++      envelope = 1.0 - 10.0 * t * t * t + 15.0 * t * t * t * t -
++          6.0 * t * t * t * t * t;
++    }
++    const double power = rho_2rho_power[itype][jtype];
++    rho += rho_2rho_weight[itype][jtype] *
++        (power == 1.0 ? 1.0 / rij : std::pow(rij, -power)) * envelope;
++  }
++  for (int neighbor_type = 1; neighbor_type <= atom->ntypes; neighbor_type++)
++    if (setflag_2rho[itype][neighbor_type] == 1)
++      rho_bulk += rho_2rho_bulk[itype][neighbor_type];
++  if (rho_bulk <= 0.0) return 0.0;
++
++  const double x_safe = std::max(rho / rho_bulk, 1.0e-12);
++  double energy = 0.0;
++  for (const auto &term : density_modulated_2b_terms) {
++    if (term.center_type != itype) continue;
++    const double modulation =
++        std::pow(x_safe, term.alpha) - 1.0 - term.alpha * (x_safe - 1.0);
++    if (modulation == 0.0) continue;
++    for (int jj = 0; jj < jnum; jj++) {
++      const int j = jlist[jj] & NEIGHMASK;
++      if (type[j] != term.neighbor_type) continue;
++      const double delx = x[i][0] - x[j][0];
++      const double dely = x[i][1] - x[j][1];
++      const double delz = x[i][2] - x[j][2];
++      const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++      energy += modulation * evaluate_2rho_cubic_spline(term, rij);
++    }
++  }
++  return energy;
++}
++
++void PairUF3::apply_density_forces_and_energy(int eflag)
++{
++  double **x = atom->x;
++  double **f = atom->f;
++  int *type = atom->type;
++
++  for (int ii = 0; ii < list->inum; ii++) {
++    const int i = list->ilist[ii];
++    if (i >= atom->nlocal) continue;
++    const int itype = type[i];
++    if (map[itype] < 0) continue;
++    int *jlist = list->firstneigh[i];
++    const int jnum = list->numneigh[i];
++    double center_energy = 0.0;
++
++    for (const auto &term : density_terms) {
++      if (term.center_type != itype || term.coefficient == 0.0) continue;
++      for (int jj = 0; jj < jnum; jj++) {
++        const int j = jlist[jj] & NEIGHMASK;
++        const int jtype = type[j];
++        if (jtype != term.neighbor_type || map[jtype] < 0) continue;
++        const double delx = x[i][0] - x[j][0];
++        const double dely = x[i][1] - x[j][1];
++        const double delz = x[i][2] - x[j][2];
++        const double rsq = delx * delx + dely * dely + delz * delz;
++        const double rij = std::sqrt(rsq);
++        if ((rij <= term.r_min) || (rij >= term.r_cut)) continue;
++        const double radial_value =
++            (term.power == 0.0 ? 1.0 : std::pow(rij, -term.power));
++        if (eflag) center_energy += term.coefficient * radial_value;
++        if (term.power == 0.0) continue;
++        const double force_over_distance =
++            term.coefficient * term.power * std::pow(rij, -term.power - 2.0);
++        const double fx = delx * force_over_distance;
++        const double fy = dely * force_over_distance;
++        const double fz = delz * force_over_distance;
++        f[i][0] += fx;
++        f[i][1] += fy;
++        f[i][2] += fz;
++        f[j][0] -= fx;
++        f[j][1] -= fy;
++        f[j][2] -= fz;
++      }
++    }
++
++    if (eflag && center_energy != 0.0)
++      ev_tally_full(i, 2.0 * center_energy, 0.0, 0.0, 0.0, 0.0, 0.0);
++  }
++}
++
++void PairUF3::apply_dipole_forces_and_energy(int eflag)
++{
++  double **x = atom->x;
++  double **f = atom->f;
++  int *type = atom->type;
++
++  for (int ii = 0; ii < list->inum; ii++) {
++    const int i = list->ilist[ii];
++    if (i >= atom->nlocal) continue;
++    const int itype = type[i];
++    if (map[itype] < 0) continue;
++    int *jlist = list->firstneigh[i];
++    const int jnum = list->numneigh[i];
++    double center_energy = 0.0;
++
++    for (const auto &term : dipole_terms) {
++      if (term.center_type != itype || term.coefficient == 0.0) continue;
++      double dipole[3] = {0.0, 0.0, 0.0};
++
++      for (int jj = 0; jj < jnum; jj++) {
++        const int j = jlist[jj] & NEIGHMASK;
++        const int jtype = type[j];
++        if (jtype != term.neighbor_type || map[jtype] < 0) continue;
++        const double delx = x[i][0] - x[j][0];
++        const double dely = x[i][1] - x[j][1];
++        const double delz = x[i][2] - x[j][2];
++        const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++        if ((rij <= term.r_min) || (rij >= term.r_cut)) continue;
++        const double weight = std::pow(rij, -term.power - 1.0);
++        dipole[0] += -delx * weight;
++        dipole[1] += -dely * weight;
++        dipole[2] += -delz * weight;
++      }
++
++      const double dipole_norm_sq =
++          dipole[0] * dipole[0] + dipole[1] * dipole[1] + dipole[2] * dipole[2];
++      if (dipole_norm_sq == 0.0) continue;
++      if (eflag) center_energy += term.coefficient * dipole_norm_sq;
++
++      for (int jj = 0; jj < jnum; jj++) {
++        const int j = jlist[jj] & NEIGHMASK;
++        const int jtype = type[j];
++        if (jtype != term.neighbor_type || map[jtype] < 0) continue;
++        const double delx = x[i][0] - x[j][0];
++        const double dely = x[i][1] - x[j][1];
++        const double delz = x[i][2] - x[j][2];
++        const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++        if ((rij <= term.r_min) || (rij >= term.r_cut)) continue;
++
++        const double delta[3] = {-delx, -dely, -delz};
++        const double dot =
++            delta[0] * dipole[0] + delta[1] * dipole[1] + delta[2] * dipole[2];
++        const double s_identity = std::pow(rij, -term.power - 1.0);
++        const double s_outer = -(term.power + 1.0) * std::pow(rij, -term.power - 3.0);
++        const double fx =
++            2.0 * term.coefficient * (s_identity * dipole[0] + s_outer * delta[0] * dot);
++        const double fy =
++            2.0 * term.coefficient * (s_identity * dipole[1] + s_outer * delta[1] * dot);
++        const double fz =
++            2.0 * term.coefficient * (s_identity * dipole[2] + s_outer * delta[2] * dot);
++        f[i][0] += fx;
++        f[i][1] += fy;
++        f[i][2] += fz;
++        f[j][0] -= fx;
++        f[j][1] -= fy;
++        f[j][2] -= fz;
++      }
++    }
++
++    if (eflag && center_energy != 0.0)
++      ev_tally_full(i, 2.0 * center_energy, 0.0, 0.0, 0.0, 0.0, 0.0);
++  }
++}
++
++void PairUF3::apply_2rho_forces()
++{
++  using TimingClock = std::chrono::steady_clock;
++  double **x = atom->x;
++  double **f = atom->f;
++  int *type = atom->type;
++  std::vector<double> modulations(density_modulated_2b_terms.size());
++  std::vector<double> modulation_derivatives(density_modulated_2b_terms.size());
++
++  for (int ii = 0; ii < list->inum; ii++) {
++    const int i = list->ilist[ii];
++    if (i >= atom->nlocal) continue;
++    const int itype = type[i];
++    if (map[itype] < 0) continue;
++    int *jlist = list->firstneigh[i];
++    const int jnum = list->numneigh[i];
++
++    TimingClock::time_point section_start;
++    if (timing_profile_enabled) section_start = TimingClock::now();
++    double rho = 0.0;
++    double rho_bulk = 0.0;
++    for (int jj = 0; jj < jnum; jj++) {
++      const int j = jlist[jj] & NEIGHMASK;
++      const int jtype = type[j];
++      if ((map[jtype] < 0) || (setflag_2rho[itype][jtype] == 0)) continue;
++      const double delx = x[i][0] - x[j][0];
++      const double dely = x[i][1] - x[j][1];
++      const double delz = x[i][2] - x[j][2];
++      const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++      const double r_min = rho_2rho_r_min[itype][jtype];
++      const double r_on = rho_2rho_r_on[itype][jtype];
++      const double r_cut = rho_2rho_r_cut[itype][jtype];
++      if ((rij <= r_min) || (rij >= r_cut)) continue;
++      double envelope = 1.0;
++      if (rij > r_on) {
++        const double t = (rij - r_on) / (r_cut - r_on);
++        envelope = 1.0 - 10.0 * t * t * t + 15.0 * t * t * t * t -
++            6.0 * t * t * t * t * t;
++      }
++      const double power = rho_2rho_power[itype][jtype];
++      rho += rho_2rho_weight[itype][jtype] *
++          (power == 1.0 ? 1.0 / rij : std::pow(rij, -power)) * envelope;
++    }
++    for (int neighbor_type = 1; neighbor_type <= atom->ntypes; neighbor_type++)
++      if (setflag_2rho[itype][neighbor_type] == 1)
++        rho_bulk += rho_2rho_bulk[itype][neighbor_type];
++    if (timing_profile_enabled)
++      timing_2rho_density +=
++          std::chrono::duration<double>(TimingClock::now() - section_start).count();
++    if (rho_bulk <= 0.0) continue;
++
++    if (timing_profile_enabled) section_start = TimingClock::now();
++    const double x_safe = std::max(rho / rho_bulk, 1.0e-12);
++    for (size_t term_index = 0; term_index < density_modulated_2b_terms.size(); term_index++) {
++      const auto &term = density_modulated_2b_terms[term_index];
++      modulations[term_index] = 0.0;
++      modulation_derivatives[term_index] = 0.0;
++      if (term.center_type != itype) continue;
++      modulations[term_index] =
++          std::pow(x_safe, term.alpha) - 1.0 - term.alpha * (x_safe - 1.0);
++      modulation_derivatives[term_index] =
++          term.alpha * (std::pow(x_safe, term.alpha - 1.0) - 1.0) / rho_bulk;
++    }
++
++    const auto add_radial_force = [&](int j, double delx, double dely, double delz,
++                                      double rij, double energy_derivative) {
++      if (rij <= 0.0 || energy_derivative == 0.0) return;
++      const double force_over_distance = -energy_derivative / rij;
++      const double fx = delx * force_over_distance;
++      const double fy = dely * force_over_distance;
++      const double fz = delz * force_over_distance;
++      f[i][0] += fx;
++      f[i][1] += fy;
++      f[i][2] += fz;
++      f[j][0] -= fx;
++      f[j][1] -= fy;
++      f[j][2] -= fz;
++    };
++
++    double density_prefactor = 0.0;
++    for (int jj = 0; jj < jnum; jj++) {
++      const int j = jlist[jj] & NEIGHMASK;
++      const int jtype = type[j];
++      const double delx = x[i][0] - x[j][0];
++      const double dely = x[i][1] - x[j][1];
++      const double delz = x[i][2] - x[j][2];
++      const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++      double direct_derivative = 0.0;
++      for (size_t term_index = 0; term_index < density_modulated_2b_terms.size(); term_index++) {
++        const auto &term = density_modulated_2b_terms[term_index];
++        if (term.center_type != itype || term.neighbor_type != jtype) continue;
++        if (modulation_derivatives[term_index] != 0.0)
++          density_prefactor +=
++              modulation_derivatives[term_index] * evaluate_2rho_cubic_spline(term, rij);
++        if (modulations[term_index] != 0.0)
++          direct_derivative +=
++              modulations[term_index] * evaluate_2rho_cubic_spline_derivative(term, rij);
++      }
++      add_radial_force(j, delx, dely, delz, rij, direct_derivative);
++    }
++    if (timing_profile_enabled)
++      timing_2rho_modulated +=
++          std::chrono::duration<double>(TimingClock::now() - section_start).count();
++
++    if (timing_profile_enabled) section_start = TimingClock::now();
++    if (density_prefactor == 0.0) {
++      if (timing_profile_enabled)
++        timing_2rho_chain +=
++            std::chrono::duration<double>(TimingClock::now() - section_start).count();
++      continue;
++    }
++    for (int jj = 0; jj < jnum; jj++) {
++      const int j = jlist[jj] & NEIGHMASK;
++      const int jtype = type[j];
++      if ((map[jtype] < 0) || (setflag_2rho[itype][jtype] == 0)) continue;
++      const double delx = x[i][0] - x[j][0];
++      const double dely = x[i][1] - x[j][1];
++      const double delz = x[i][2] - x[j][2];
++      const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++      const double r_min = rho_2rho_r_min[itype][jtype];
++      const double r_on = rho_2rho_r_on[itype][jtype];
++      const double r_cut = rho_2rho_r_cut[itype][jtype];
++      if ((rij <= r_min) || (rij >= r_cut)) continue;
++      double envelope = 1.0;
++      double envelope_derivative = 0.0;
++      if (rij > r_on) {
++        const double t = (rij - r_on) / (r_cut - r_on);
++        envelope = 1.0 - 10.0 * t * t * t + 15.0 * t * t * t * t -
++            6.0 * t * t * t * t * t;
++        envelope_derivative =
++            (-30.0 * t * t + 60.0 * t * t * t - 30.0 * t * t * t * t) /
++            (r_cut - r_on);
++      }
++      const double power = rho_2rho_power[itype][jtype];
++      const double density_derivative = [&]() {
++        if (power == 1.0) {
++          const double inverse_distance = 1.0 / rij;
++          return -inverse_distance * inverse_distance * envelope +
++              inverse_distance * envelope_derivative;
++        }
++        return -power * std::pow(rij, -power - 1.0) * envelope +
++            std::pow(rij, -power) * envelope_derivative;
++      }();
++      add_radial_force(j, delx, dely, delz, rij,
++                       density_prefactor * rho_2rho_weight[itype][jtype] * density_derivative);
++    }
++    if (timing_profile_enabled)
++      timing_2rho_chain +=
++          std::chrono::duration<double>(TimingClock::now() - section_start).count();
++  }
++}
++
++void PairUF3::write_2rho_debug_density()
++{
++  if (!debug_2rho_density) return;
++
++  double **x = atom->x;
++  int *type = atom->type;
++  tagint *tag = atom->tag;
++  const int nlocal = atom->nlocal;
++  std::vector<double> rho(nlocal, 0.0);
++  std::vector<double> rho_bulk(nlocal, 0.0);
++  std::vector<double> e2rho(nlocal, 0.0);
++
++  for (int ii = 0; ii < list->inum; ii++) {
++    const int i = list->ilist[ii];
++    if (i >= nlocal) continue;
++    const int itype = type[i];
++    if (map[itype] < 0) continue;
++    int *jlist = list->firstneigh[i];
++    const int jnum = list->numneigh[i];
++    for (int jj = 0; jj < jnum; jj++) {
++      int j = jlist[jj] & NEIGHMASK;
++      const int jtype = type[j];
++      if ((map[jtype] < 0) || (setflag_2rho[itype][jtype] == 0)) continue;
++      const double delx = x[i][0] - x[j][0];
++      const double dely = x[i][1] - x[j][1];
++      const double delz = x[i][2] - x[j][2];
++      const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++      const double r_min = rho_2rho_r_min[itype][jtype];
++      const double r_on = rho_2rho_r_on[itype][jtype];
++      const double r_cut = rho_2rho_r_cut[itype][jtype];
++      if ((rij <= r_min) || (rij >= r_cut)) continue;
++      double envelope = 1.0;
++      if (rij > r_on) {
++        const double t = (rij - r_on) / (r_cut - r_on);
++        envelope = 1.0 - 10.0 * t * t * t + 15.0 * t * t * t * t -
++                   6.0 * t * t * t * t * t;
++      }
++      rho[i] += rho_2rho_weight[itype][jtype] *
++          std::pow(rij, -rho_2rho_power[itype][jtype]) * envelope;
++    }
++    for (int neighbor_type = 1; neighbor_type <= atom->ntypes; neighbor_type++)
++      if (setflag_2rho[itype][neighbor_type] == 1)
++        rho_bulk[i] += rho_2rho_bulk[itype][neighbor_type];
++
++    const double x_normalized = rho_bulk[i] > 0.0 ? rho[i] / rho_bulk[i] : 0.0;
++    const double x_safe = std::max(x_normalized, 1.0e-12);
++    for (const auto &term : density_modulated_2b_terms) {
++      if (term.center_type != itype) continue;
++      const double modulation =
++          std::pow(x_safe, term.alpha) - 1.0 - term.alpha * (x_safe - 1.0);
++      if (modulation == 0.0) continue;
++      for (int jj = 0; jj < jnum; jj++) {
++        const int j = jlist[jj] & NEIGHMASK;
++        if (type[j] != term.neighbor_type) continue;
++        const double delx = x[i][0] - x[j][0];
++        const double dely = x[i][1] - x[j][1];
++        const double delz = x[i][2] - x[j][2];
++        const double rij = std::sqrt(delx * delx + dely * dely + delz * delz);
++        e2rho[i] += modulation * evaluate_2rho_cubic_spline(term, rij);
++      }
++    }
++  }
++
++  std::ofstream output(debug_2rho_density_prefix + "." + std::to_string(comm->me));
++  if (!output)
++    error->all(FLERR, "UF3: Could not open debug_rho output file");
++  output << "# id type rho rho_bulk x";
++  for (double alpha : rho_2rho_alphas) output << " g_" << alpha;
++  output << " e2rho\n";
++  output << std::setprecision(17);
++  for (int i = 0; i < nlocal; i++) {
++    const double x_normalized = rho_bulk[i] > 0.0 ? rho[i] / rho_bulk[i] : 0.0;
++    output << tag[i] << " " << type[i] << " " << rho[i] << " " << rho_bulk[i] << " "
++           << x_normalized;
++    for (double alpha : rho_2rho_alphas) {
++      const double x_safe = std::max(x_normalized, 1.0e-12);
++      const double modulation = std::pow(x_safe, alpha) - 1.0 - alpha * (x_safe - 1.0);
++      output << " " << modulation;
++    }
++    output << " " << e2rho[i] << "\n";
++  }
++}
++
+ /* ----------------------------------------------------------------------
+    init for one type pair i,j and corresponding j,i
+ ------------------------------------------------------------------------- */
+@@ -1061,6 +2074,8 @@ double PairUF3::init_one(int i /*i*/, int /*j*/ j)
+ 
+   if (!bsplines_created) create_bsplines();
+ 
++  if ((map[i] < 0) || (map[j] < 0)) return 0.0;
++
+   //init_one is called by pair.cpp at line 267 where it is squred
+   //at line 268
+   return cut[i][j];
+@@ -1070,14 +2085,20 @@ void PairUF3::create_bsplines()
+ {
+   const int num_of_elements = atom->ntypes;
+   bsplines_created = 1;
+-  int spacing_type = knot_spacing_type_2b[1][1];
++  int spacing_type = 0;
++  bool spacing_type_set = false;
+   for (int i = 1; i < num_of_elements + 1; i++) {
+     for (int j = 1; j < num_of_elements + 1; j++) {
++      if ((map[i] < 0) || (map[j] < 0)) continue;
+       if (setflag[i][j] != 1)
+         error->all(FLERR,
+                    "UF3: Not all 2-body UF potentials are set, "
+                    "missing potential for {}-{} interaction",
+                    i, j);
++      if (!spacing_type_set) {
++        spacing_type = knot_spacing_type_2b[i][j];
++        spacing_type_set = true;
++      }
+       /*if (spacing_type != knot_spacing_type_2b[i][j])
+         error->all(FLERR,
+                    "UF3: In the current version the knot spacing type, "
+@@ -1091,6 +2112,7 @@ void PairUF3::create_bsplines()
+     for (int i = 1; i < num_of_elements + 1; i++) {
+       for (int j = 1; j < num_of_elements + 1; j++) {
+         for (int k = 1; k < num_of_elements + 1; k++) {
++          if ((map[i] < 0) || (map[j] < 0) || (map[k] < 0)) continue;
+           if (setflag_3b[i][j][k] != 1)
+             error->all(FLERR,
+                        "UF3: Not all 3-body UF potentials are set, "
+@@ -1117,19 +2139,73 @@ void PairUF3::create_bsplines()
+   }
+ 
+   create_cached_constants_2b();
++  create_cached_constants_2rho();
+   if (pot_3b) create_cached_constants_3b();
+ }
+ 
++void PairUF3::create_cached_constants_2rho()
++{
++  for (auto &term : density_modulated_2b_terms) {
++    const int n_coefficients = static_cast<int>(term.coefficients.size());
++    term.spline_constants.clear();
++    term.derivative_constants.clear();
++    term.uniform_knots = false;
++    term.knot_spacing = 0.0;
++    if (n_coefficients <= 0 || static_cast<int>(term.knots.size()) != n_coefficients + 4) continue;
++
++    const double spacing = term.knots[4] - term.knots[3];
++    if (spacing > 0.0) {
++      term.uniform_knots = true;
++      for (int knot_index = 4; knot_index < n_coefficients; knot_index++) {
++        const double candidate = term.knots[knot_index + 1] - term.knots[knot_index];
++        if (std::abs(candidate - spacing) > 1.0e-8 * std::max(1.0, std::abs(spacing))) {
++          term.uniform_knots = false;
++          break;
++        }
++      }
++      if (term.uniform_knots) term.knot_spacing = spacing;
++    }
++
++    term.spline_constants.resize(n_coefficients);
++    for (int coefficient_index = 0; coefficient_index < n_coefficients; coefficient_index++) {
++      uf3_bspline_basis3 basis(lmp, &term.knots[coefficient_index],
++                               term.coefficients[coefficient_index]);
++      for (int constant_index = 0; constant_index < 16; constant_index++)
++        term.spline_constants[coefficient_index][constant_index] = basis.constants[constant_index];
++    }
++
++    if (n_coefficients < 2) continue;
++    term.derivative_constants.resize(n_coefficients - 1);
++    for (int coefficient_index = 0; coefficient_index < n_coefficients - 1; coefficient_index++) {
++      const double derivative_coefficient =
++          3.0 * (term.coefficients[coefficient_index + 1] -
++                 term.coefficients[coefficient_index]) /
++          (term.knots[coefficient_index + 4] - term.knots[coefficient_index + 1]);
++      uf3_bspline_basis2 basis(lmp, &term.knots[coefficient_index + 1],
++                               derivative_coefficient);
++      for (int constant_index = 0; constant_index < 9; constant_index++)
++        term.derivative_constants[coefficient_index][constant_index] = basis.constants[constant_index];
++    }
++  }
++}
++
+ int PairUF3::get_starting_index_uniform_2b(int i, int j, double r)
+ {
+-  return 3 + (int) ((r - n2b_knots_array[i][j][0]) / (knot_spacing_2b[i][j]));
++  int index = 3 + (int) ((r - n2b_knots_array[i][j][0]) / (knot_spacing_2b[i][j]));
++  if (index < 3) index = 3;
++  if (index > n2b_coeff_array_size[i][j] - 1) index = n2b_coeff_array_size[i][j] - 1;
++  return index;
+ }
+ 
+ int PairUF3::get_starting_index_uniform_3b(int i, int j, int k, double r, int knot_dim)
+ {
+-  return 3 +
++  int index = 3 +
+       (int) (((r - n3b_knots_array[map_3b[i][j][k]][knot_dim][0]) /
+               knot_spacing_3b[i][j][k][knot_dim]));
++  if (index < 3) index = 3;
++  if (index > n3b_knots_array_size[map_3b[i][j][k]][knot_dim] - 5)
++    index = n3b_knots_array_size[map_3b[i][j][k]][knot_dim] - 5;
++  return index;
+ }
+ 
+ int PairUF3::get_starting_index_nonuniform_2b(int i, int j, double r)
+@@ -1137,7 +2213,8 @@ int PairUF3::get_starting_index_nonuniform_2b(int i, int j, double r)
+   for (int l = 3; l < n2b_knots_array_size[i][j] - 1; ++l) {
+     if ((n2b_knots_array[i][j][l] <= r) && (r < n2b_knots_array[i][j][l + 1])) return l;
+   }
+-  return -1;
++  if (r < n2b_knots_array[i][j][3]) return 3;
++  return n2b_coeff_array_size[i][j] - 1;
+ }
+ 
+ int PairUF3::get_starting_index_nonuniform_3b(int i, int j, int k, double r, int knot_dim)
+@@ -1147,7 +2224,8 @@ int PairUF3::get_starting_index_nonuniform_3b(int i, int j, int k, double r, int
+         (r < n3b_knots_array[map_3b[i][j][k]][knot_dim][l + 1]))
+       return l;
+   }
+-  return -1;
++  if (r < n3b_knots_array[map_3b[i][j][k]][knot_dim][3]) return 3;
++  return n3b_knots_array_size[map_3b[i][j][k]][knot_dim] - 5;
+ }
+ 
+ void PairUF3::create_cached_constants_2b()
+@@ -1163,6 +2241,7 @@ void PairUF3::create_cached_constants_2b()
+ 
+   for (int i = 1; i < num_of_elements + 1; i++) {
+     for (int j = 1; j < num_of_elements + 1; j++) {
++      if ((map[i] < 0) || (map[j] < 0) || (n2b_coeff_array_size[i][j] <= 0)) continue;
+       for (int l = 0; l < n2b_coeff_array_size[i][j]; l++) {
+         uf3_bspline_basis3 bspline_basis(lmp, &n2b_knots_array[i][j][l], n2b_coeff_array[i][j][l]);
+         for (int cc = 0; cc < 16; cc++) {
+@@ -1174,6 +2253,7 @@ void PairUF3::create_cached_constants_2b()
+ 
+   for (int i = 1; i < num_of_elements + 1; i++) {
+     for (int j = 1; j < num_of_elements + 1; j++) {
++      if ((map[i] < 0) || (map[j] < 0) || (n2b_coeff_array_size[i][j] <= 0)) continue;
+       //initialize coeff and knots for derivative
+       //double* knots_for_deri = new double[n2b_knots_array_size[i][j]-2];
+       double *knots_for_deri = nullptr;
+@@ -1231,7 +2311,9 @@ void PairUF3::create_cached_constants_3b()
+   for (int i = 1; i < num_of_elements + 1; i++) {
+     for (int j = 1; j < num_of_elements + 1; j++) {
+       for (int k = 1; k < num_of_elements + 1; k++) {
++        if ((map[i] < 0) || (map[j] < 0) || (map[k] < 0)) continue;
+         int map_to = map_3b[i][j][k];
++        if (n3b_coeff_array_size[map_to][0] <= 0) continue;
+ 
+         for (int l = 0; l < n3b_knots_array_size[map_to][2] - 4; l++) {
+           uf3_bspline_basis3 bspline_basis_ij(lmp, &n3b_knots_array[map_to][2][l], 1);
+@@ -1257,7 +2339,9 @@ void PairUF3::create_cached_constants_3b()
+   for (int i = 1; i < num_of_elements + 1; i++) {
+     for (int j = 1; j < num_of_elements + 1; j++) {
+       for (int k = 1; k < num_of_elements + 1; k++) {
++        if ((map[i] < 0) || (map[j] < 0) || (map[k] < 0)) continue;
+         int map_to = map_3b[i][j][k];
++        if (n3b_coeff_array_size[map_to][0] <= 0) continue;
+         double **knots_for_der = nullptr;    //new double*[3];
+ 
+         //n3b_knots_array_size[map_to][0] for jk knot vector --> always largest
+@@ -1349,9 +2433,41 @@ void PairUF3::compute(int eflag, int vflag)
+   double rsq, rij, rik, rjk;
+   double rij_sq, rik_sq, rjk_sq;
+   int *ilist, *jlist, *numneigh, **firstneigh;
++  using TimingClock = std::chrono::steady_clock;
++  TimingClock::time_point total_start;
++  if (timing_profile_enabled) total_start = TimingClock::now();
+ 
+   ev_init(eflag, vflag);
+ 
++  if (has_density_block) {
++    TimingClock::time_point start;
++    if (timing_profile_enabled) start = TimingClock::now();
++    apply_density_forces_and_energy(eflag);
++    if (timing_profile_enabled)
++      timing_density_force += std::chrono::duration<double>(TimingClock::now() - start).count();
++  }
++
++  if (has_dipole_block) {
++    TimingClock::time_point start;
++    if (timing_profile_enabled) start = TimingClock::now();
++    apply_dipole_forces_and_energy(eflag);
++    if (timing_profile_enabled)
++      timing_dipole_force += std::chrono::duration<double>(TimingClock::now() - start).count();
++  }
++
++  if (debug_2rho_density) write_2rho_debug_density();
++  const bool evaluate_2rho_energy =
++      has_density_modulated_2b_block && (!debug_2rho_density || diagnostic_2rho_energy_tally);
++  const bool evaluate_2rho_forces =
++      has_density_modulated_2b_block && (!debug_2rho_density || diagnostic_2rho_force_tally);
++  if (evaluate_2rho_forces) {
++    TimingClock::time_point start;
++    if (timing_profile_enabled) start = TimingClock::now();
++    apply_2rho_forces();
++    if (timing_profile_enabled)
++      timing_2rho_force += std::chrono::duration<double>(TimingClock::now() - start).count();
++  }
++
+   double **x = atom->x;
+   double **f = atom->f;
+   int *type = atom->type;
+@@ -1362,7 +2478,24 @@ void PairUF3::compute(int eflag, int vflag)
+   ilist = list->ilist;
+   numneigh = list->numneigh;
+   firstneigh = list->firstneigh;
++
++  if (evaluate_2rho_energy && eflag) {
++    TimingClock::time_point start;
++    if (timing_profile_enabled) start = TimingClock::now();
++    for (ii = 0; ii < inum; ii++) {
++      i = ilist[ii];
++      if (i >= nlocal) continue;
++      const double e2rho = evaluate_2rho_center_energy(i);
++      ev_tally_full(i, 2.0 * e2rho, 0.0, 0.0, 0.0, 0.0, 0.0);
++    }
++    if (timing_profile_enabled)
++      timing_2rho_energy += std::chrono::duration<double>(TimingClock::now() - start).count();
++  }
++
+   // loop over neighbors of my atoms
++  TimingClock::time_point pair_loop_start;
++  double three_body_this_compute = 0.0;
++  if (timing_profile_enabled) pair_loop_start = TimingClock::now();
+   for (ii = 0; ii < inum; ii++) {
+     evdwl = 0;
+     i = ilist[ii];
+@@ -1370,6 +2503,7 @@ void PairUF3::compute(int eflag, int vflag)
+     ytmp = x[i][1];
+     ztmp = x[i][2];
+     itype = type[i];
++    if (map[itype] < 0) continue;
+     jlist = firstneigh[i];
+     jnum = numneigh[i];
+     int numshort = 0;
+@@ -1386,6 +2520,7 @@ void PairUF3::compute(int eflag, int vflag)
+ 
+       rsq = delx * delx + dely * dely + delz * delz;
+       jtype = type[j];
++      if (map[jtype] < 0) continue;
+       if (rsq < cutsq[itype][jtype]) {
+         rij = sqrt(rsq);
+ 
+@@ -1400,6 +2535,8 @@ void PairUF3::compute(int eflag, int vflag)
+           }
+         }
+ 
++        if (rij >= cut_2b[itype][jtype]) continue;
++
+         int knot_start_index = (this->*get_starting_index_2b)(itype, jtype, rij);
+ 
+         double force_2b = cached_constants_2b_deri[itype][jtype][knot_start_index - 1][0];
+@@ -1483,6 +2620,9 @@ void PairUF3::compute(int eflag, int vflag)
+       }
+     }
+ 
++    TimingClock::time_point three_body_start;
++    if (timing_profile_enabled && pot_3b) three_body_start = TimingClock::now();
++
+     // 3-body interaction
+     // jth atom
+     jnum = numshort - 1;
+@@ -1492,6 +2632,7 @@ void PairUF3::compute(int eflag, int vflag)
+       fij[2] = fji[2] = 0;
+       j = neighshort[jj];
+       jtype = type[j];
++      if (map[jtype] < 0) continue;
+       del_rji[0] = x[j][0] - xtmp;
+       del_rji[1] = x[j][1] - ytmp;
+       del_rji[2] = x[j][2] - ztmp;
+@@ -1511,6 +2652,7 @@ void PairUF3::compute(int eflag, int vflag)
+ 
+         k = neighshort[kk];
+         ktype = type[k];
++        if (map[ktype] < 0) continue;
+         del_rki[0] = x[k][0] - xtmp;
+         del_rki[1] = x[k][1] - ytmp;
+         del_rki[2] = x[k][2] - ztmp;
+@@ -1833,8 +2975,22 @@ void PairUF3::compute(int eflag, int vflag)
+         }
+       }
+     }
++    if (timing_profile_enabled && pot_3b)
++      three_body_this_compute +=
++          std::chrono::duration<double>(TimingClock::now() - three_body_start).count();
++  }
++  if (timing_profile_enabled) {
++    const double outer_elapsed =
++        std::chrono::duration<double>(TimingClock::now() - pair_loop_start).count();
++    timing_3b_triplet += three_body_this_compute;
++    timing_2b_shortlist += outer_elapsed - three_body_this_compute;
+   }
+   if (vflag_fdotr) virial_fdotr_compute();
++  if (timing_profile_enabled) {
++    timing_pair_total += std::chrono::duration<double>(TimingClock::now() - total_start).count();
++    timing_profile_calls++;
++    if (timing_profile_calls % timing_profile_interval == 0) write_timing_profile();
++  }
+ }
+ 
+ double PairUF3::single(int /*i*/, int /*j*/, int itype, int jtype, double rsq,
+@@ -1842,8 +2998,11 @@ double PairUF3::single(int /*i*/, int /*j*/, int itype, int jtype, double rsq,
+ {
+   double value = 0.0;
+   double r = sqrt(rsq);
++  fforce = 0.0;
++
++  if ((map[itype] < 0) || (map[jtype] < 0)) return 0.0;
+ 
+-  if (r < cut[itype][jtype]) {
++  if (r < cut_2b[itype][jtype]) {
+     int knot_start_index = (this->*get_starting_index_2b)(itype, jtype, r);
+ 
+     double force_2b = cached_constants_2b_deri[itype][jtype][knot_start_index - 1][0];
+diff --git a/src/ML-UF3/pair_uf3.h b/src/ML-UF3/pair_uf3.h
+index 58a951c4c2..60718fab57 100644
+--- a/src/ML-UF3/pair_uf3.h
++++ b/src/ML-UF3/pair_uf3.h
+@@ -29,6 +29,10 @@ PairStyle(uf3,PairUF3);
+ 
+ #include "pair.h"
+ 
++#include <array>
++#include <string>
++#include <vector>
++
+ namespace LAMMPS_NS {
+ 
+ class PairUF3 : public Pair {
+@@ -46,7 +50,41 @@ class PairUF3 : public Pair {
+ 
+  protected:
+   int ***setflag_3b, **knot_spacing_type_2b, ***knot_spacing_type_3b;
+-  double **cut, ***cut_3b, **cut_3b_list, ****min_cut_3b;
++  int **setflag_2rho;
++  double **cut, **cut_2b, ***cut_3b, **cut_3b_list, ****min_cut_3b;
++  double **rho_2rho_r_min, **rho_2rho_r_on, **rho_2rho_r_cut;
++  double **rho_2rho_power, **rho_2rho_bulk, **rho_2rho_weight;
++
++  struct DensityModulated2bTerm {
++    int center_type;
++    int neighbor_type;
++    double alpha;
++    std::vector<double> knots;
++    std::vector<double> coefficients;
++    std::vector<std::array<double, 16>> spline_constants;
++    std::vector<std::array<double, 9>> derivative_constants;
++    bool uniform_knots = false;
++    double knot_spacing = 0.0;
++  };
++  struct ScalarDensityTerm {
++    int center_type;
++    int neighbor_type;
++    double r_min;
++    double r_cut;
++    double power;
++    double coefficient;
++  };
++  struct DipoleTerm {
++    int center_type;
++    int neighbor_type;
++    double r_min;
++    double r_cut;
++    double power;
++    double coefficient;
++  };
++  std::vector<ScalarDensityTerm> density_terms;
++  std::vector<DipoleTerm> dipole_terms;
++  std::vector<DensityModulated2bTerm> density_modulated_2b_terms;
+   double **knot_spacing_2b, ****knot_spacing_3b;
+ 
+   double ***n2b_knots_array, ***n2b_coeff_array;
+@@ -63,12 +101,58 @@ class PairUF3 : public Pair {
+ 
+   void uf3_read_unified_pot_file(char *potf_name);
+   void communicate();
++  void write_2rho_debug_density();
++  int get_2rho_knot_start_index(const DensityModulated2bTerm &, double) const;
++  double evaluate_2rho_cubic_spline(const DensityModulated2bTerm &, double) const;
++  double evaluate_2rho_cubic_spline_derivative(const DensityModulated2bTerm &, double) const;
++  double evaluate_2rho_center_energy(int) const;
++  void apply_2rho_forces();
++  void apply_density_forces_and_energy(int);
++  void apply_dipole_forces_and_energy(int);
++  void write_timing_profile();
+   int bsplines_created;
+   bool pot_3b;
++  bool has_density_block;
++  bool has_dipole_block;
++  bool has_density_modulated_2b_block;
++  bool debug_2rho_density;
++  bool diagnostic_2rho_energy_tally;
++  bool diagnostic_2rho_force_tally;
++  bool timing_profile_enabled;
++  std::string debug_2rho_density_prefix;
++  std::string timing_profile_file;
++  std::vector<double> rho_2rho_alphas;
++  int timing_profile_interval;
++  bigint timing_profile_calls;
++  double timing_pair_total;
++  double timing_density_force;
++  double timing_density_energy;
++  double timing_dipole_force;
++  double timing_dipole_energy;
++  double timing_2rho_force;
++  double timing_2rho_energy;
++  double timing_2rho_density;
++  double timing_2rho_modulated;
++  double timing_2rho_chain;
++  // Moment-modulated terms share a moment-accumulation pass.  Each term has
++  // separate direct energy/force buckets so common and term-specific work can
++  // be profiled independently once its evaluator is enabled.
++  double timing_moment_accumulation;
++  double timing_2p_force;
++  double timing_2p_energy;
++  double timing_2d_force;
++  double timing_2d_energy;
++  double timing_2q_force;
++  double timing_2q_energy;
++  double timing_2a_force;
++  double timing_2a_energy;
++  double timing_2b_shortlist;
++  double timing_3b_triplet;
+ 
+   virtual void allocate();
+   void create_bsplines();
+   void create_cached_constants_2b();
++  void create_cached_constants_2rho();
+   void create_cached_constants_3b();
+ 
+   int get_starting_index_uniform_2b(int i, int j, double r);

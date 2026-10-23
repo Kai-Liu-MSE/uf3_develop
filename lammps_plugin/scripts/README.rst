@@ -28,3 +28,21 @@ Will create :code:`directory` if it does not exists and will write UF3 lammps po
 
 It will also additionally print lines that should be added to the lammps input file for using UF3 lammps potential files.
 Citation meta-data will be left blank. Please enter appropriate citation for the generated UF3 LAMMPS potential manually.
+
+Local weighted 2rho extension
+=============================
+
+The local UF3 exporter writes one :code:`2RHO` block per center-neighbor
+orientation. A mixed pair therefore has two blocks with the same spline
+coefficients but potentially different density metadata. The density line is
+
+.. code:: text
+
+   r_min r_on r_cut power rho_bulk weight quintic conservative
+
+For center atom :code:`i`, the density sums :code:`weight(center, neighbor) *
+r**(-power) * cutoff(r)` over its neighbors. :code:`rho_bulk` is supplied
+separately for each center-neighbor orientation; it is not automatically
+rescaled by the weight. An older seven-field density line without :code:`weight`
+remains readable and uses a weight of 1. This extension requires the matching
+local ML-UF3 LAMMPS source; it is not part of the upstream pair-style format.

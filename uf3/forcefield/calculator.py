@@ -76,7 +76,13 @@ class UFCalculator(ase_calc.Calculator):
                                                      self.bspline_config
                                                      .density_modulated_3b_interactions,
                                                      self.bspline_config
-                                                     .dipole_modulated_2b_interactions)
+                                                     .dipole_modulated_2b_interactions,
+                                                     self.bspline_config
+                                                     .bond_dipole_modulated_2b_interactions,
+                                                     self.bspline_config
+                                                     .tensor_modulated_2b_interactions,
+                                                     self.bspline_config
+                                                     .bond_tensor_modulated_2b_interactions)
         self.pair_potentials = construct_pair_potentials(self.solutions,
                                                          self.bspline_config)
         self.has_nonzero_3b = False
@@ -235,6 +241,18 @@ class UFCalculator(ase_calc.Calculator):
             self._energy_dipole_modulated_2b(atoms, supercell)
             if self.bspline_config.dipole_modulated_2b_enabled else 0.0
         )
+        e_bond_dipole_modulated_2b = (
+            self._energy_bond_dipole_modulated_2b(atoms, supercell)
+            if self.bspline_config.bond_dipole_modulated_2b_enabled else 0.0
+        )
+        e_tensor_modulated_2b = (
+            self._energy_tensor_modulated_2b(atoms, supercell)
+            if self.bspline_config.tensor_modulated_2b_enabled else 0.0
+        )
+        e_bond_tensor_modulated_2b = (
+            self._energy_bond_tensor_modulated_2b(atoms, supercell)
+            if self.bspline_config.bond_tensor_modulated_2b_enabled else 0.0
+        )
 
         if self.degree >= 2:
             e_2b = self._energy_2b(atoms, supercell)
@@ -248,7 +266,8 @@ class UFCalculator(ase_calc.Calculator):
         energy = (e_1b + e_density + e_dipole + e_shell_density +
                   e_density_moment + e_local_composition +
                   e_density_modulated_2b + e_density_modulated_3b +
-                  e_dipole_modulated_2b +
+                  e_dipole_modulated_2b + e_bond_dipole_modulated_2b +
+                  e_tensor_modulated_2b + e_bond_tensor_modulated_2b +
                   e_2b + e_3b)
         return energy
 
@@ -354,7 +373,8 @@ class UFCalculator(ase_calc.Calculator):
             self.bspline_config.density_modulated_2b_rho_bulk_map,
             self.bspline_config.density_modulated_2b_cutoff_on_map,
             self.bspline_config.density_modulated_2b_cutoff_mode,
-            supercell=supercell)
+            supercell=supercell,
+            weight_map=self.bspline_config.density_modulated_2b_weight_map)
 
     def _density_modulated_3b_state(self, atoms, supercell):
         return density.density_modulation_state(
@@ -389,7 +409,8 @@ class UFCalculator(ase_calc.Calculator):
             n_lead=self.bspline_config.leading_trim[2],
             n_trail=self.bspline_config.trailing_trim[2],
             modulation=self.bspline_config.density_modulated_2b_modulation,
-            density_state=density_state)
+            density_state=density_state,
+            density_weight_map=self.bspline_config.density_modulated_2b_weight_map)
         coefficients = np.concatenate([
             np.asarray(self.solutions[interaction])
             for interaction
@@ -409,6 +430,8 @@ class UFCalculator(ase_calc.Calculator):
             self.bspline_config.dipole_modulated_2b_r_max_map,
             self.bspline_config.dipole_modulated_2b_power_map,
             self.bspline_config.dipole_modulated_2b_eps_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_mode,
             supercell=supercell,
             n_lead=self.bspline_config.leading_trim[2],
             n_trail=self.bspline_config.trailing_trim[2])
@@ -416,6 +439,82 @@ class UFCalculator(ase_calc.Calculator):
             np.asarray(self.solutions[interaction])
             for interaction
             in self.bspline_config.dipole_modulated_2b_interactions])
+        return float(np.dot(feature_vector, coefficients))
+
+    def _energy_bond_dipole_modulated_2b(self, atoms, supercell):
+        feature_vector = density.bond_dipole_modulated_pair_values(
+            atoms,
+            self.bspline_config.bond_dipole_modulated_2b_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_dipole_modulated_2b_dipole_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_r_min_map,
+            self.bspline_config.bond_dipole_modulated_2b_r_max_map,
+            self.bspline_config.bond_dipole_modulated_2b_power_map,
+            self.bspline_config.bond_dipole_modulated_2b_eps_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.bspline_config.leading_trim[2],
+            n_trail=self.bspline_config.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_dipole_modulated_2b_residualize))
+        coefficients = np.concatenate([
+            np.asarray(self.solutions[interaction])
+            for interaction
+            in self.bspline_config.bond_dipole_modulated_2b_interactions])
+        return float(np.dot(feature_vector, coefficients))
+
+    def _energy_tensor_modulated_2b(self, atoms, supercell):
+        feature_vector = density.tensor_modulated_pair_values(
+            atoms,
+            self.bspline_config.tensor_modulated_2b_interactions,
+            self.bspline_config.tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.tensor_modulated_2b_r_min_map,
+            self.bspline_config.tensor_modulated_2b_r_max_map,
+            self.bspline_config.tensor_modulated_2b_power_map,
+            self.bspline_config.tensor_modulated_2b_eps_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.bspline_config.leading_trim[2],
+            n_trail=self.bspline_config.trailing_trim[2])
+        coefficients = np.concatenate([
+            np.asarray(self.solutions[interaction])
+            for interaction
+            in self.bspline_config.tensor_modulated_2b_interactions])
+        return float(np.dot(feature_vector, coefficients))
+
+    def _energy_bond_tensor_modulated_2b(self, atoms, supercell):
+        feature_vector = density.bond_tensor_modulated_pair_values(
+            atoms,
+            self.bspline_config.bond_tensor_modulated_2b_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_r_min_map,
+            self.bspline_config.bond_tensor_modulated_2b_r_max_map,
+            self.bspline_config.bond_tensor_modulated_2b_power_map,
+            self.bspline_config.bond_tensor_modulated_2b_eps_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.bspline_config.leading_trim[2],
+            n_trail=self.bspline_config.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_tensor_modulated_2b_residualize))
+        coefficients = np.concatenate([
+            np.asarray(self.solutions[interaction])
+            for interaction
+            in self.bspline_config.bond_tensor_modulated_2b_interactions])
         return float(np.dot(feature_vector, coefficients))
 
     def _energy_density_modulated_3b(self, atoms, supercell,
@@ -571,6 +670,21 @@ class UFCalculator(ase_calc.Calculator):
             if self.bspline_config.dipole_modulated_2b_enabled
             else np.zeros_like(f_shape)
         )
+        f_bond_dipole_modulated_2b = (
+            self._forces_bond_dipole_modulated_2b(atoms, supercell)
+            if self.bspline_config.bond_dipole_modulated_2b_enabled
+            else np.zeros_like(f_shape)
+        )
+        f_tensor_modulated_2b = (
+            self._forces_tensor_modulated_2b(atoms, supercell)
+            if self.bspline_config.tensor_modulated_2b_enabled
+            else np.zeros_like(f_shape)
+        )
+        f_bond_tensor_modulated_2b = (
+            self._forces_bond_tensor_modulated_2b(atoms, supercell)
+            if self.bspline_config.bond_tensor_modulated_2b_enabled
+            else np.zeros_like(f_shape)
+        )
 
         if self.degree >= 2:
             f_2b = self._forces_2b(atoms, supercell)
@@ -584,7 +698,8 @@ class UFCalculator(ase_calc.Calculator):
         forces = (f_density + f_dipole + f_shell_density +
                   f_density_moment + f_local_composition +
                   f_density_modulated_2b + f_density_modulated_3b +
-                  f_dipole_modulated_2b +
+                  f_dipole_modulated_2b + f_bond_dipole_modulated_2b +
+                  f_tensor_modulated_2b + f_bond_tensor_modulated_2b +
                   f_2b + f_3b)
         return forces
 
@@ -674,7 +789,8 @@ class UFCalculator(ase_calc.Calculator):
             n_lead=self.bspline_config.leading_trim[2],
             n_trail=self.bspline_config.trailing_trim[2],
             modulation=self.bspline_config.density_modulated_2b_modulation,
-            density_state=density_state)
+            density_state=density_state,
+            density_weight_map=self.bspline_config.density_modulated_2b_weight_map)
         coefficients = np.concatenate([
             np.asarray(self.solutions[interaction])
             for interaction
@@ -694,6 +810,8 @@ class UFCalculator(ase_calc.Calculator):
             self.bspline_config.dipole_modulated_2b_r_max_map,
             self.bspline_config.dipole_modulated_2b_power_map,
             self.bspline_config.dipole_modulated_2b_eps_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.dipole_modulated_2b_cutoff_mode,
             supercell=supercell,
             n_lead=self.bspline_config.leading_trim[2],
             n_trail=self.bspline_config.trailing_trim[2])
@@ -701,6 +819,82 @@ class UFCalculator(ase_calc.Calculator):
             np.asarray(self.solutions[interaction])
             for interaction
             in self.bspline_config.dipole_modulated_2b_interactions])
+        return np.tensordot(feature_array, coefficients, axes=([2], [0]))
+
+    def _forces_bond_dipole_modulated_2b(self, atoms, supercell):
+        feature_array = density.bond_dipole_modulated_pair_force_features(
+            atoms,
+            self.bspline_config.bond_dipole_modulated_2b_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_dipole_modulated_2b_dipole_interactions,
+            self.bspline_config.bond_dipole_modulated_2b_r_min_map,
+            self.bspline_config.bond_dipole_modulated_2b_r_max_map,
+            self.bspline_config.bond_dipole_modulated_2b_power_map,
+            self.bspline_config.bond_dipole_modulated_2b_eps_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_dipole_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.bspline_config.leading_trim[2],
+            n_trail=self.bspline_config.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_dipole_modulated_2b_residualize))
+        coefficients = np.concatenate([
+            np.asarray(self.solutions[interaction])
+            for interaction
+            in self.bspline_config.bond_dipole_modulated_2b_interactions])
+        return np.tensordot(feature_array, coefficients, axes=([2], [0]))
+
+    def _forces_tensor_modulated_2b(self, atoms, supercell):
+        feature_array = density.tensor_modulated_pair_force_features(
+            atoms,
+            self.bspline_config.tensor_modulated_2b_interactions,
+            self.bspline_config.tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.tensor_modulated_2b_r_min_map,
+            self.bspline_config.tensor_modulated_2b_r_max_map,
+            self.bspline_config.tensor_modulated_2b_power_map,
+            self.bspline_config.tensor_modulated_2b_eps_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.bspline_config.leading_trim[2],
+            n_trail=self.bspline_config.trailing_trim[2])
+        coefficients = np.concatenate([
+            np.asarray(self.solutions[interaction])
+            for interaction
+            in self.bspline_config.tensor_modulated_2b_interactions])
+        return np.tensordot(feature_array, coefficients, axes=([2], [0]))
+
+    def _forces_bond_tensor_modulated_2b(self, atoms, supercell):
+        feature_array = density.bond_tensor_modulated_pair_force_features(
+            atoms,
+            self.bspline_config.bond_tensor_modulated_2b_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_pair_map,
+            self.bspline_config.r_min_map,
+            self.bspline_config.r_max_map,
+            self.bspline_config.basis_functions,
+            self.bspline_config.bond_tensor_modulated_2b_tensor_interactions,
+            self.bspline_config.bond_tensor_modulated_2b_r_min_map,
+            self.bspline_config.bond_tensor_modulated_2b_r_max_map,
+            self.bspline_config.bond_tensor_modulated_2b_power_map,
+            self.bspline_config.bond_tensor_modulated_2b_eps_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_on_map,
+            self.bspline_config.bond_tensor_modulated_2b_cutoff_mode,
+            supercell=supercell,
+            n_lead=self.bspline_config.leading_trim[2],
+            n_trail=self.bspline_config.trailing_trim[2],
+            residualize=(
+                self.bspline_config.bond_tensor_modulated_2b_residualize))
+        coefficients = np.concatenate([
+            np.asarray(self.solutions[interaction])
+            for interaction
+            in self.bspline_config.bond_tensor_modulated_2b_interactions])
         return np.tensordot(feature_array, coefficients, axes=([2], [0]))
 
     def _forces_density_modulated_3b(self, atoms, supercell,
@@ -980,6 +1174,9 @@ def coefficients_by_interaction(element_list: List,
                                 density_modulated_2b_interactions: List[Tuple[str]] = None,
                                 density_modulated_3b_interactions: List[Tuple[str]] = None,
                                 dipole_modulated_2b_interactions: List[Tuple[str]] = None,
+                                bond_dipole_modulated_2b_interactions: List[Tuple[str]] = None,
+                                tensor_modulated_2b_interactions: List[Tuple[str]] = None,
+                                bond_tensor_modulated_2b_interactions: List[Tuple[str]] = None,
                                 ) -> Dict[Tuple[str], np.ndarray]:
     """
     Arrange flattened coefficients into dictionary based on
@@ -1019,6 +1216,12 @@ def coefficients_by_interaction(element_list: List,
         keys.extend(density_modulated_3b_interactions)
     if dipole_modulated_2b_interactions is not None:
         keys.extend(dipole_modulated_2b_interactions)
+    if bond_dipole_modulated_2b_interactions is not None:
+        keys.extend(bond_dipole_modulated_2b_interactions)
+    if tensor_modulated_2b_interactions is not None:
+        keys.extend(tensor_modulated_2b_interactions)
+    if bond_tensor_modulated_2b_interactions is not None:
+        keys.extend(bond_tensor_modulated_2b_interactions)
     keys.extend(interactions_map[2])
     keys.extend(interactions_map.get(3, []))
     for idx, key in enumerate(keys):

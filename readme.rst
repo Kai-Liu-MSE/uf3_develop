@@ -50,10 +50,22 @@ The most relevant files are:
 - ``uf3/forcefield/calculator.py``: ASE-compatible calculator support
   for evaluating trained extended UF3 models.
 
-At present, the extended density terms are intended to be used through
-the Python/ASE calculator path. The LAMMPS plugin included here is kept
-for compatibility with the original UF3 workflow and should not be
-assumed to support the new density-modulated terms.
+The original ``main`` version uses the Python/ASE calculator path for
+extended density terms. This development branch adds a species-weighted
+single-density ``2rho`` implementation, model serialization, training
+features, and an exporter for the corresponding LAMMPS potential blocks.
+For mixed pairs, the exporter writes both center-neighbor orientations.
+
+The matching local ML-UF3 C++ changes are distributed as a patch under
+``lammps_plugin/patches/`` against a pinned LAMMPS base commit. The
+unmodified upstream LAMMPS ``pair_style uf3`` does not support this
+extended potential format. See the patch README for installation scope.
+
+The branch includes a small C/Co/W parity test for Python versus local
+LAMMPS energy and forces, including a two-rank MPI check. This is a
+development snapshot, not a validated WC-Co production potential or an
+AION deployment. The existing WC-Co optimization scripts are not included
+in this core-library branch.
 
 Setup
 -----

@@ -94,6 +94,29 @@ def get_dipole_modulated_pair_interactions(
     return [("dipole_modulated_2b", *pair) for pair in pair_interactions]
 
 
+def get_bond_dipole_modulated_pair_interactions(
+        pair_interactions: List[Tuple[str, str]],
+        ) -> List[DensityInteraction]:
+    """Return bond-projected dipole-modulated two-body interaction keys."""
+    return [("bond_dipole_modulated_2b", *pair)
+            for pair in pair_interactions]
+
+
+def get_tensor_modulated_pair_interactions(
+        pair_interactions: List[Tuple[str, str]],
+        ) -> List[DensityInteraction]:
+    """Return tensor-anisotropy-modulated two-body interaction keys."""
+    return [("tensor_modulated_2b", *pair) for pair in pair_interactions]
+
+
+def get_bond_tensor_modulated_pair_interactions(
+        pair_interactions: List[Tuple[str, str]],
+        ) -> List[DensityInteraction]:
+    """Return bond-projected tensor-modulated two-body interaction keys."""
+    return [("bond_tensor_modulated_2b", *pair)
+            for pair in pair_interactions]
+
+
 def _numbers_from_interaction(interaction: DensityInteraction) -> Tuple[int, int]:
     center, neighbor = interaction[-2:]
     center_z, neighbor_z = ase_symbols.symbols2numbers([center, neighbor])
@@ -201,6 +224,11 @@ def cutoff_envelope(r: np.ndarray,
     return envelope, derivative
 
 
+def default_cutoff_on(r_cut: float) -> float:
+    """Default start of smooth density taper."""
+    return 0.85 * float(r_cut)
+
+
 def local_density_by_interaction(
         geom: ase.Atoms,
         density_interactions: List[DensityInteraction],
@@ -210,6 +238,7 @@ def local_density_by_interaction(
         supercell: ase.Atoms = None,
         cutoff_on_map: Dict[DensityInteraction, float] | None = None,
         cutoff_mode: str = "hard",
+        weight_map: Dict[DensityInteraction, float] | None = None,
         ) -> Tuple[np.ndarray, np.ndarray]:
     """Return per-atom density and per-atom bulk-density normalization."""
     if supercell is None:
@@ -242,7 +271,7 @@ def local_density_by_interaction(
         center_rows = geo_composition == center_z
         if result[0] is not None:
             _, _, rho_part = result
-            rho += rho_part
+            rho += rho_part * (1.0 if weight_map is None else weight_map[interaction])
         rho_bulk[center_rows] += 1.0
     return rho, rho_bulk
 
@@ -271,6 +300,7 @@ def density_modulation_state(
         density_cutoff_mode: str = "hard",
         supercell: ase.Atoms = None,
         eps: float = 1e-12,
+        weight_map: Dict[DensityInteraction, float] | None = None,
         ) -> Dict[str, np.ndarray]:
     """Precompute local density, bulk normalization, and normalized density."""
     rho, _ = local_density_by_interaction(
@@ -281,7 +311,8 @@ def density_modulation_state(
         density_power_map,
         supercell=supercell,
         cutoff_on_map=density_cutoff_on_map,
-        cutoff_mode=density_cutoff_mode)
+        cutoff_mode=density_cutoff_mode,
+        weight_map=weight_map)
     rho_bulk = _bulk_density_by_atom(geom, density_interactions, rho_bulk_map, eps)
     return {
         "rho": rho,
@@ -315,6 +346,8 @@ def local_asymmetry_by_interaction(
         eps_map: Dict[DensityInteraction, float],
         supercell: ase.Atoms = None,
         default_eps: float = 1e-8,
+        cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        cutoff_mode: str = "hard",
         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return rho, dipole vector, and normalized asymmetry per atom."""
     if supercell is None:
@@ -342,7 +375,11 @@ def local_asymmetry_by_interaction(
         rij = distance_matrix[i_where, j_where]
         delta = sup_positions[j_where] - geo_positions[i_where]
         unit = delta / rij[:, None]
-        weight = rij ** (-power_map[interaction])
+        cutoff_on = None
+        if cutoff_on_map is not None:
+            cutoff_on = cutoff_on_map.get(interaction, None)
+        envelope, _ = cutoff_envelope(rij, cutoff_on, r_max, cutoff_mode)
+        weight = rij ** (-power_map[interaction]) * envelope
         np.add.at(rho, i_where, weight)
         np.add.at(p_vec, i_where, weight[:, None] * unit)
 
@@ -352,6 +389,64 @@ def local_asymmetry_by_interaction(
     p2 = np.einsum("ij,ij->i", p_vec, p_vec)
     a2 = p2 / (denom ** 2)
     return rho, p_vec, a2, eps_values
+
+
+def local_tensor_anisotropy_by_interaction(
+        geom: ase.Atoms,
+        tensor_interactions: List[DensityInteraction],
+        r_min_map: Dict[DensityInteraction, float],
+        r_max_map: Dict[DensityInteraction, float],
+        power_map: Dict[DensityInteraction, float],
+        eps_map: Dict[DensityInteraction, float],
+        supercell: ase.Atoms = None,
+        default_eps: float = 1e-8,
+        cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        cutoff_mode: str = "quintic",
+        ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return rho, second moment, traceless tensor, and anisotropy per atom."""
+    if supercell is None:
+        supercell = geom
+    n_atoms = len(geom)
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    sup_positions = supercell.get_positions()
+    geo_positions = geom.get_positions()
+
+    rho = np.zeros(n_atoms)
+    moment = np.zeros((n_atoms, 3, 3))
+    for interaction in tensor_interactions:
+        center_z, neighbor_z = _numbers_from_interaction(interaction)
+        center_mask = geo_composition[:, None] == center_z
+        neighbor_mask = sup_composition[None, :] == neighbor_z
+        r_min = max(r_min_map[interaction], 0.0)
+        r_max = r_max_map[interaction]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = center_mask & neighbor_mask & cut_mask
+        if not np.any(mask):
+            continue
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        delta = sup_positions[j_where] - geo_positions[i_where]
+        unit = delta / rij[:, None]
+        cutoff_on = None
+        if cutoff_on_map is not None:
+            cutoff_on = cutoff_on_map.get(interaction, None)
+        envelope, _ = cutoff_envelope(rij, cutoff_on, r_max, cutoff_mode)
+        weight = rij ** (-power_map[interaction]) * envelope
+        uu = unit[:, :, None] * unit[:, None, :]
+        np.add.at(rho, i_where, weight)
+        np.add.at(moment, i_where, weight[:, None, None] * uu)
+
+    eps_values = _eps_by_atom(
+        geom, tensor_interactions, eps_map, default_eps=default_eps)
+    trace = np.trace(moment, axis1=1, axis2=2)
+    eye = np.eye(3)
+    traceless = moment - (trace / 3.0)[:, None, None] * eye[None, :, :]
+    denom = trace + eps_values
+    d2 = np.einsum("nij,nij->n", traceless, traceless)
+    anisotropy = d2 / (denom ** 2)
+    return rho, moment, traceless, anisotropy, eps_values
 
 
 def _weighted_basis_sum(points: np.ndarray,
@@ -391,6 +486,7 @@ def density_modulated_pair_values(
         eps: float = 1e-12,
         modulation: str = "conservative",
         density_state: Dict[str, np.ndarray] | None = None,
+        density_weight_map: Dict[DensityInteraction, float] | None = None,
         ) -> np.ndarray:
     """Generate density-modulated two-body energy features."""
     if supercell is None:
@@ -409,7 +505,8 @@ def density_modulated_pair_values(
             density_cutoff_on_map,
             density_cutoff_mode,
             supercell=supercell,
-            eps=eps)
+            eps=eps,
+            weight_map=density_weight_map)
     x = density_state["x"]
 
     blocks = []
@@ -457,6 +554,7 @@ def density_modulated_pair_force_features(
         eps: float = 1e-12,
         modulation: str = "conservative",
         density_state: Dict[str, np.ndarray] | None = None,
+        density_weight_map: Dict[DensityInteraction, float] | None = None,
         ) -> np.ndarray:
     """Generate ``-d/dR`` force features for density-modulated pairs."""
     if supercell is None:
@@ -478,7 +576,8 @@ def density_modulated_pair_force_features(
             density_cutoff_on_map,
             density_cutoff_mode,
             supercell=supercell,
-            eps=eps)
+            eps=eps,
+            weight_map=density_weight_map)
     rho_bulk = density_state["rho_bulk"]
     x = density_state["x"]
     density_pairs = _density_derivative_pairs(
@@ -491,7 +590,8 @@ def density_modulated_pair_force_features(
         density_cutoff_on_map,
         density_cutoff_mode,
         distance_matrix=distance_matrix,
-        coords=sup_positions)
+        coords=sup_positions,
+        weight_map=density_weight_map)
 
     feature_blocks = []
     for interaction in modulated_interactions:
@@ -517,7 +617,8 @@ def density_modulated_pair_force_features(
         psi_prime = _density_modulation(
             x, alpha, derivative=True, eps=eps, mode=modulation) / rho_bulk
         drij_dR = distances.compute_direction_cosines(
-            sup_positions, distance_matrix, i_where, j_where, n_atoms)
+            sup_positions, distance_matrix, i_where, j_where, n_atoms,
+            j_primary=j_where % n_atoms)
 
         for spline_idx in range(n_lead, n_splines - n_trail):
             values = basis_functions[pair][spline_idx](rij, nu=0)
@@ -552,6 +653,7 @@ def _density_derivative_pairs(
         density_cutoff_mode: str,
         distance_matrix: np.ndarray | None = None,
         coords: np.ndarray | None = None,
+        weight_map: Dict[DensityInteraction, float] | None = None,
         ) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """Precompute pairwise ``-d rho / dR`` factors for density chain rules."""
     n_atoms = len(geom)
@@ -577,7 +679,8 @@ def _density_derivative_pairs(
         d_i, d_j = np.where(d_mask)
         d_rij = distance_matrix[d_i, d_j]
         d_drij_dR = distances.compute_direction_cosines(
-            coords, distance_matrix, d_i, d_j, n_atoms)
+            coords, distance_matrix, d_i, d_j, n_atoms,
+            j_primary=d_j % n_atoms)
         power = density_power_map[density_interaction]
         cutoff_on = None
         if density_cutoff_on_map is not None:
@@ -588,6 +691,8 @@ def _density_derivative_pairs(
             power * d_rij ** (-power - 1.0) * envelope
             - d_rij ** (-power) * envelope_deriv
         )
+        if weight_map is not None:
+            chain_base *= weight_map[density_interaction]
         pairs.append((d_i, d_j, d_drij_dR, chain_base))
     return pairs
 
@@ -829,6 +934,8 @@ def dipole_modulated_pair_values(
         dipole_r_max_map: Dict[DensityInteraction, float],
         dipole_power_map: Dict[DensityInteraction, float],
         dipole_eps_map: Dict[DensityInteraction, float],
+        dipole_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        dipole_cutoff_mode: str = "hard",
         supercell: ase.Atoms = None,
         n_lead: int = 0,
         n_trail: int = 0,
@@ -848,7 +955,9 @@ def dipole_modulated_pair_values(
         dipole_power_map,
         dipole_eps_map,
         supercell=supercell,
-        default_eps=eps)
+        default_eps=eps,
+        cutoff_on_map=dipole_cutoff_on_map,
+        cutoff_mode=dipole_cutoff_mode)
 
     blocks = []
     for interaction in modulated_interactions:
@@ -883,6 +992,8 @@ def dipole_modulated_pair_force_features(
         dipole_r_max_map: Dict[DensityInteraction, float],
         dipole_power_map: Dict[DensityInteraction, float],
         dipole_eps_map: Dict[DensityInteraction, float],
+        dipole_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        dipole_cutoff_mode: str = "hard",
         supercell: ase.Atoms = None,
         n_lead: int = 0,
         n_trail: int = 0,
@@ -905,7 +1016,9 @@ def dipole_modulated_pair_force_features(
         dipole_power_map,
         dipole_eps_map,
         supercell=supercell,
-        default_eps=eps)
+        default_eps=eps,
+        cutoff_on_map=dipole_cutoff_on_map,
+        cutoff_mode=dipole_cutoff_mode)
     denom = rho + eps_values
     p2 = np.einsum("ij,ij->i", p_vec, p_vec)
 
@@ -963,8 +1076,19 @@ def dipole_modulated_pair_force_features(
                 d_delta = sup_positions[d_j] - geo_positions[d_i]
                 d_unit = d_delta / d_rij[:, None]
                 power = dipole_power_map[dipole_interaction]
-                weight = d_rij ** (-power)
-                weight_prime = -power * d_rij ** (-power - 1.0)
+                cutoff_on = None
+                if dipole_cutoff_on_map is not None:
+                    cutoff_on = dipole_cutoff_on_map.get(
+                        dipole_interaction, None)
+                envelope, envelope_deriv = cutoff_envelope(
+                    d_rij, cutoff_on, d_r_max, dipole_cutoff_mode)
+                raw_weight = d_rij ** (-power)
+                raw_weight_prime = -power * d_rij ** (-power - 1.0)
+                weight = raw_weight * envelope
+                weight_prime = (
+                    raw_weight_prime * envelope
+                    + raw_weight * envelope_deriv
+                )
                 projection = (eye[None, :, :] -
                               d_unit[:, :, None] * d_unit[:, None, :])
                 jacobian = (
@@ -980,6 +1104,750 @@ def dipole_modulated_pair_force_features(
                     weight_prime)[:, None] * d_unit
                 grad_a2 = grad_p - grad_rho
                 chain_vecs = g[d_i, None] * grad_a2
+                np.add.at(block[:, :, spline_idx], d_i, chain_vecs)
+                real_d_j = d_j < n_atoms
+                if np.any(real_d_j):
+                    np.add.at(block[:, :, spline_idx],
+                              d_j[real_d_j],
+                              -chain_vecs[real_d_j])
+
+        feature_blocks.append(block)
+    return np.concatenate(feature_blocks, axis=2) if feature_blocks else \
+        np.zeros((n_atoms, 3, 0))
+
+
+def bond_dipole_modulated_pair_values(
+        geom: ase.Atoms,
+        modulated_interactions: List[DensityInteraction],
+        pair_map: Dict[DensityInteraction, Tuple[str, str]],
+        pair_r_min_map: Dict[Tuple[str, str], float],
+        pair_r_max_map: Dict[Tuple[str, str], float],
+        basis_functions: Dict[Tuple[str, str], List],
+        dipole_interactions: List[DensityInteraction],
+        dipole_r_min_map: Dict[DensityInteraction, float],
+        dipole_r_max_map: Dict[DensityInteraction, float],
+        dipole_power_map: Dict[DensityInteraction, float],
+        dipole_eps_map: Dict[DensityInteraction, float],
+        dipole_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        dipole_cutoff_mode: str = "hard",
+        supercell: ase.Atoms = None,
+        n_lead: int = 0,
+        n_trail: int = 0,
+        eps: float = 1e-8,
+        residualize: bool = True,
+        ) -> np.ndarray:
+    """Generate bond-projected dipole-modulated two-body energy features."""
+    if supercell is None:
+        supercell = geom
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    sup_positions = supercell.get_positions()
+    geo_positions = geom.get_positions()
+    rho, p_vec, _, eps_values = local_asymmetry_by_interaction(
+        geom,
+        dipole_interactions,
+        dipole_r_min_map,
+        dipole_r_max_map,
+        dipole_power_map,
+        dipole_eps_map,
+        supercell=supercell,
+        default_eps=eps,
+        cutoff_on_map=dipole_cutoff_on_map,
+        cutoff_mode=dipole_cutoff_mode)
+    denom = rho + eps_values
+
+    blocks = []
+    for interaction in modulated_interactions:
+        pair = pair_map[interaction]
+        pair_numbers = ase_symbols.symbols2numbers(pair)
+        comp_mask = distances.mask_matrix_by_pair_interaction(
+            pair_numbers, geo_composition, sup_composition)
+        r_min = max(pair_r_min_map[pair], 0.0)
+        r_max = pair_r_max_map[pair]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = comp_mask & cut_mask
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        if len(rij) == 0:
+            blocks.append(np.zeros(len(basis_functions[pair])))
+            continue
+        delta = sup_positions[j_where] - geo_positions[i_where]
+        unit = delta / rij[:, None]
+        d_values = np.einsum("ij,ij->i", unit, p_vec[i_where]) / denom[i_where]
+        if residualize:
+            counts = np.bincount(i_where, minlength=len(geom)).astype(float)
+            sums = np.bincount(i_where, weights=d_values, minlength=len(geom))
+            means = np.divide(sums,
+                              counts,
+                              out=np.zeros_like(sums),
+                              where=counts > 0)
+            d_values = d_values - means[i_where]
+        block = _weighted_basis_sum(rij,
+                                    d_values,
+                                    basis_functions[pair],
+                                    n_lead=n_lead,
+                                    n_trail=n_trail)
+        blocks.append(block)
+    return np.concatenate(blocks) if blocks else np.array([])
+
+
+def bond_dipole_modulated_pair_force_features(
+        geom: ase.Atoms,
+        modulated_interactions: List[DensityInteraction],
+        pair_map: Dict[DensityInteraction, Tuple[str, str]],
+        pair_r_min_map: Dict[Tuple[str, str], float],
+        pair_r_max_map: Dict[Tuple[str, str], float],
+        basis_functions: Dict[Tuple[str, str], List],
+        dipole_interactions: List[DensityInteraction],
+        dipole_r_min_map: Dict[DensityInteraction, float],
+        dipole_r_max_map: Dict[DensityInteraction, float],
+        dipole_power_map: Dict[DensityInteraction, float],
+        dipole_eps_map: Dict[DensityInteraction, float],
+        dipole_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        dipole_cutoff_mode: str = "hard",
+        supercell: ase.Atoms = None,
+        n_lead: int = 0,
+        n_trail: int = 0,
+        eps: float = 1e-8,
+        residualize: bool = True,
+        ) -> np.ndarray:
+    """Generate ``-d/dR`` force features for bond-projected dipole pairs."""
+    if supercell is None:
+        supercell = geom
+    n_atoms = len(geom)
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    geo_positions = geom.get_positions()
+    sup_positions = supercell.get_positions()
+    rho, p_vec, _, eps_values = local_asymmetry_by_interaction(
+        geom,
+        dipole_interactions,
+        dipole_r_min_map,
+        dipole_r_max_map,
+        dipole_power_map,
+        dipole_eps_map,
+        supercell=supercell,
+        default_eps=eps,
+        cutoff_on_map=dipole_cutoff_on_map,
+        cutoff_mode=dipole_cutoff_mode)
+    denom = rho + eps_values
+
+    feature_blocks = []
+    eye = np.eye(3)
+    for interaction in modulated_interactions:
+        pair = pair_map[interaction]
+        pair_numbers = ase_symbols.symbols2numbers(pair)
+        comp_mask = distances.mask_matrix_by_pair_interaction(
+            pair_numbers, geo_composition, sup_composition)
+        r_min = max(pair_r_min_map[pair], 0.0)
+        r_max = pair_r_max_map[pair]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = comp_mask & cut_mask
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        n_splines = len(basis_functions[pair])
+        block = np.zeros((n_atoms, 3, n_splines))
+        if len(rij) == 0:
+            feature_blocks.append(block)
+            continue
+
+        delta = sup_positions[j_where] - geo_positions[i_where]
+        unit = delta / rij[:, None]
+        dot_up = np.einsum("ij,ij->i", unit, p_vec[i_where])
+        d_values = dot_up / denom[i_where]
+        if residualize:
+            counts = np.bincount(i_where, minlength=n_atoms).astype(float)
+            sums = np.bincount(i_where, weights=d_values, minlength=n_atoms)
+            means = np.divide(sums,
+                              counts,
+                              out=np.zeros_like(sums),
+                              where=counts > 0)
+            h_values = d_values - means[i_where]
+        else:
+            counts = np.zeros(n_atoms)
+            h_values = d_values
+
+        for spline_idx in range(n_lead, n_splines - n_trail):
+            values = basis_functions[pair][spline_idx](rij, nu=0)
+            derivs = basis_functions[pair][spline_idx](rij, nu=1)
+            values[np.isnan(values)] = 0.0
+            derivs[np.isnan(derivs)] = 0.0
+
+            direct_vecs = h_values[:, None] * derivs[:, None] * unit
+            np.add.at(block[:, :, spline_idx], i_where, direct_vecs)
+            real_j = j_where < n_atoms
+            if np.any(real_j):
+                np.add.at(block[:, :, spline_idx],
+                          j_where[real_j],
+                          -direct_vecs[real_j])
+
+            if residualize:
+                sum_values = np.bincount(i_where,
+                                         weights=values,
+                                         minlength=n_atoms)
+                mean_values = np.divide(sum_values,
+                                        counts,
+                                        out=np.zeros_like(sum_values),
+                                        where=counts > 0)
+                g_edges = values - mean_values[i_where]
+            else:
+                g_edges = values
+
+            adj_p = np.zeros((n_atoms, 3))
+            adj_rho = np.zeros(n_atoms)
+            np.add.at(adj_p,
+                      i_where,
+                      g_edges[:, None] * unit / denom[i_where, None])
+            np.add.at(adj_rho,
+                      i_where,
+                      -g_edges * dot_up / (denom[i_where] ** 2))
+
+            direct_u = g_edges[:, None] * p_vec[i_where] / denom[i_where, None]
+            proj_direct = (
+                direct_u - np.sum(direct_u * unit, axis=1)[:, None] * unit
+            ) / rij[:, None]
+            np.add.at(block[:, :, spline_idx], i_where, proj_direct)
+            if np.any(real_j):
+                np.add.at(block[:, :, spline_idx],
+                          j_where[real_j],
+                          -proj_direct[real_j])
+
+            for dipole_interaction in dipole_interactions:
+                center_z, neighbor_z = _numbers_from_interaction(
+                    dipole_interaction)
+                center_mask = geo_composition[:, None] == center_z
+                neighbor_mask = sup_composition[None, :] == neighbor_z
+                d_r_min = max(dipole_r_min_map[dipole_interaction], 0.0)
+                d_r_max = dipole_r_max_map[dipole_interaction]
+                d_cut = ((distance_matrix > d_r_min) &
+                         (distance_matrix < d_r_max))
+                d_mask = center_mask & neighbor_mask & d_cut
+                if not np.any(d_mask):
+                    continue
+                d_i, d_j = np.where(d_mask)
+                active = ((np.linalg.norm(adj_p[d_i], axis=1) != 0.0) |
+                          (adj_rho[d_i] != 0.0))
+                if not np.any(active):
+                    continue
+                d_i = d_i[active]
+                d_j = d_j[active]
+                d_rij = distance_matrix[d_i, d_j]
+                d_delta = sup_positions[d_j] - geo_positions[d_i]
+                d_unit = d_delta / d_rij[:, None]
+                power = dipole_power_map[dipole_interaction]
+                cutoff_on = None
+                if dipole_cutoff_on_map is not None:
+                    cutoff_on = dipole_cutoff_on_map.get(
+                        dipole_interaction, None)
+                envelope, envelope_deriv = cutoff_envelope(
+                    d_rij, cutoff_on, d_r_max, dipole_cutoff_mode)
+                raw_weight = d_rij ** (-power)
+                raw_weight_prime = -power * d_rij ** (-power - 1.0)
+                weight = raw_weight * envelope
+                weight_prime = (
+                    raw_weight_prime * envelope
+                    + raw_weight * envelope_deriv
+                )
+                projection = (eye[None, :, :] -
+                              d_unit[:, :, None] * d_unit[:, None, :])
+                jacobian = (
+                    weight_prime[:, None, None] *
+                    d_unit[:, :, None] * d_unit[:, None, :] +
+                    (weight / d_rij)[:, None, None] * projection
+                )
+                chain_vecs = np.einsum(
+                    "nij,nj->ni", jacobian, adj_p[d_i])
+                chain_vecs += (
+                    adj_rho[d_i, None] * weight_prime[:, None] * d_unit
+                )
+                np.add.at(block[:, :, spline_idx], d_i, chain_vecs)
+                real_d_j = d_j < n_atoms
+                if np.any(real_d_j):
+                    np.add.at(block[:, :, spline_idx],
+                              d_j[real_d_j],
+                              -chain_vecs[real_d_j])
+
+        feature_blocks.append(block)
+    return np.concatenate(feature_blocks, axis=2) if feature_blocks else \
+        np.zeros((n_atoms, 3, 0))
+
+
+def tensor_modulated_pair_values(
+        geom: ase.Atoms,
+        modulated_interactions: List[DensityInteraction],
+        pair_map: Dict[DensityInteraction, Tuple[str, str]],
+        pair_r_min_map: Dict[Tuple[str, str], float],
+        pair_r_max_map: Dict[Tuple[str, str], float],
+        basis_functions: Dict[Tuple[str, str], List],
+        tensor_interactions: List[DensityInteraction],
+        tensor_r_min_map: Dict[DensityInteraction, float],
+        tensor_r_max_map: Dict[DensityInteraction, float],
+        tensor_power_map: Dict[DensityInteraction, float],
+        tensor_eps_map: Dict[DensityInteraction, float],
+        tensor_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        tensor_cutoff_mode: str = "quintic",
+        supercell: ase.Atoms = None,
+        n_lead: int = 0,
+        n_trail: int = 0,
+        eps: float = 1e-8,
+        ) -> np.ndarray:
+    """Generate tensor-anisotropy-modulated two-body energy features."""
+    if supercell is None:
+        supercell = geom
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    _, _, _, anisotropy, _ = local_tensor_anisotropy_by_interaction(
+        geom,
+        tensor_interactions,
+        tensor_r_min_map,
+        tensor_r_max_map,
+        tensor_power_map,
+        tensor_eps_map,
+        supercell=supercell,
+        default_eps=eps,
+        cutoff_on_map=tensor_cutoff_on_map,
+        cutoff_mode=tensor_cutoff_mode)
+
+    blocks = []
+    for interaction in modulated_interactions:
+        pair = pair_map[interaction]
+        pair_numbers = ase_symbols.symbols2numbers(pair)
+        comp_mask = distances.mask_matrix_by_pair_interaction(
+            pair_numbers, geo_composition, sup_composition)
+        r_min = max(pair_r_min_map[pair], 0.0)
+        r_max = pair_r_max_map[pair]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = comp_mask & cut_mask
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        block = _weighted_basis_sum(rij,
+                                    anisotropy[i_where],
+                                    basis_functions[pair],
+                                    n_lead=n_lead,
+                                    n_trail=n_trail)
+        blocks.append(block)
+    return np.concatenate(blocks) if blocks else np.array([])
+
+
+def tensor_modulated_pair_force_features(
+        geom: ase.Atoms,
+        modulated_interactions: List[DensityInteraction],
+        pair_map: Dict[DensityInteraction, Tuple[str, str]],
+        pair_r_min_map: Dict[Tuple[str, str], float],
+        pair_r_max_map: Dict[Tuple[str, str], float],
+        basis_functions: Dict[Tuple[str, str], List],
+        tensor_interactions: List[DensityInteraction],
+        tensor_r_min_map: Dict[DensityInteraction, float],
+        tensor_r_max_map: Dict[DensityInteraction, float],
+        tensor_power_map: Dict[DensityInteraction, float],
+        tensor_eps_map: Dict[DensityInteraction, float],
+        tensor_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        tensor_cutoff_mode: str = "quintic",
+        supercell: ase.Atoms = None,
+        n_lead: int = 0,
+        n_trail: int = 0,
+        eps: float = 1e-8,
+        ) -> np.ndarray:
+    """Generate ``-d/dR`` force features for tensor-anisotropy pairs."""
+    if supercell is None:
+        supercell = geom
+    n_atoms = len(geom)
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    geo_positions = geom.get_positions()
+    sup_positions = supercell.get_positions()
+    _, _, traceless, anisotropy, eps_values = \
+        local_tensor_anisotropy_by_interaction(
+            geom,
+            tensor_interactions,
+            tensor_r_min_map,
+            tensor_r_max_map,
+            tensor_power_map,
+            tensor_eps_map,
+            supercell=supercell,
+            default_eps=eps,
+            cutoff_on_map=tensor_cutoff_on_map,
+            cutoff_mode=tensor_cutoff_mode)
+    trace = np.zeros(n_atoms)
+    for interaction in tensor_interactions:
+        center_z, neighbor_z = _numbers_from_interaction(interaction)
+        center_mask = geo_composition[:, None] == center_z
+        neighbor_mask = sup_composition[None, :] == neighbor_z
+        r_min = max(tensor_r_min_map[interaction], 0.0)
+        r_max = tensor_r_max_map[interaction]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = center_mask & neighbor_mask & cut_mask
+        if not np.any(mask):
+            continue
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        cutoff_on = None
+        if tensor_cutoff_on_map is not None:
+            cutoff_on = tensor_cutoff_on_map.get(interaction, None)
+        envelope, _ = cutoff_envelope(rij, cutoff_on, r_max, tensor_cutoff_mode)
+        weight = rij ** (-tensor_power_map[interaction]) * envelope
+        np.add.at(trace, i_where, weight)
+    denom = trace + eps_values
+    d2 = np.einsum("nij,nij->n", traceless, traceless)
+
+    feature_blocks = []
+    eye = np.eye(3)
+    for interaction in modulated_interactions:
+        pair = pair_map[interaction]
+        pair_numbers = ase_symbols.symbols2numbers(pair)
+        comp_mask = distances.mask_matrix_by_pair_interaction(
+            pair_numbers, geo_composition, sup_composition)
+        r_min = max(pair_r_min_map[pair], 0.0)
+        r_max = pair_r_max_map[pair]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = comp_mask & cut_mask
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        n_splines = len(basis_functions[pair])
+        block = np.zeros((n_atoms, 3, n_splines))
+        if len(rij) == 0:
+            feature_blocks.append(block)
+            continue
+        delta = sup_positions[j_where] - geo_positions[i_where]
+        unit = delta / rij[:, None]
+
+        for spline_idx in range(n_lead, n_splines - n_trail):
+            values = basis_functions[pair][spline_idx](rij, nu=0)
+            derivs = basis_functions[pair][spline_idx](rij, nu=1)
+            values[np.isnan(values)] = 0.0
+            derivs[np.isnan(derivs)] = 0.0
+
+            direct_vecs = anisotropy[i_where, None] * derivs[:, None] * unit
+            np.add.at(block[:, :, spline_idx], i_where, direct_vecs)
+            real_j = j_where < n_atoms
+            if np.any(real_j):
+                np.add.at(block[:, :, spline_idx],
+                          j_where[real_j],
+                          -direct_vecs[real_j])
+
+            g = np.zeros(n_atoms)
+            np.add.at(g, i_where, values)
+            for tensor_interaction in tensor_interactions:
+                center_z, neighbor_z = _numbers_from_interaction(
+                    tensor_interaction)
+                center_mask = geo_composition[:, None] == center_z
+                neighbor_mask = sup_composition[None, :] == neighbor_z
+                d_r_min = max(tensor_r_min_map[tensor_interaction], 0.0)
+                d_r_max = tensor_r_max_map[tensor_interaction]
+                d_cut = ((distance_matrix > d_r_min) &
+                         (distance_matrix < d_r_max))
+                d_mask = center_mask & neighbor_mask & d_cut
+                if not np.any(d_mask):
+                    continue
+                d_i, d_j = np.where(d_mask)
+                active = g[d_i] != 0.0
+                if not np.any(active):
+                    continue
+                d_i = d_i[active]
+                d_j = d_j[active]
+                d_rij = distance_matrix[d_i, d_j]
+                d_delta = sup_positions[d_j] - geo_positions[d_i]
+                d_unit = d_delta / d_rij[:, None]
+                power = tensor_power_map[tensor_interaction]
+                cutoff_on = None
+                if tensor_cutoff_on_map is not None:
+                    cutoff_on = tensor_cutoff_on_map.get(
+                        tensor_interaction, None)
+                envelope, envelope_deriv = cutoff_envelope(
+                    d_rij, cutoff_on, d_r_max, tensor_cutoff_mode)
+                raw_weight = d_rij ** (-power)
+                raw_weight_prime = -power * d_rij ** (-power - 1.0)
+                weight = raw_weight * envelope
+                weight_prime = (
+                    raw_weight_prime * envelope
+                    + raw_weight * envelope_deriv
+                )
+
+                d_tensor = traceless[d_i]
+                d_u = np.einsum("nij,nj->ni", d_tensor, d_unit)
+                u_d_u = np.einsum("ni,ni->n", d_unit, d_u)
+                tensor_grad = (
+                    weight_prime[:, None] * u_d_u[:, None] * d_unit +
+                    (weight / d_rij)[:, None] *
+                    (2.0 * d_u - 2.0 * u_d_u[:, None] * d_unit)
+                )
+                grad_a = (
+                    2.0 * tensor_grad / (denom[d_i] ** 2)[:, None]
+                    - 2.0 * d2[d_i, None] /
+                    (denom[d_i] ** 3)[:, None] *
+                    weight_prime[:, None] * d_unit
+                )
+                chain_vecs = g[d_i, None] * grad_a
+                np.add.at(block[:, :, spline_idx], d_i, chain_vecs)
+                real_d_j = d_j < n_atoms
+                if np.any(real_d_j):
+                    np.add.at(block[:, :, spline_idx],
+                              d_j[real_d_j],
+                              -chain_vecs[real_d_j])
+
+        feature_blocks.append(block)
+    return np.concatenate(feature_blocks, axis=2) if feature_blocks else \
+        np.zeros((n_atoms, 3, 0))
+
+
+def bond_tensor_modulated_pair_values(
+        geom: ase.Atoms,
+        modulated_interactions: List[DensityInteraction],
+        pair_map: Dict[DensityInteraction, Tuple[str, str]],
+        pair_r_min_map: Dict[Tuple[str, str], float],
+        pair_r_max_map: Dict[Tuple[str, str], float],
+        basis_functions: Dict[Tuple[str, str], List],
+        tensor_interactions: List[DensityInteraction],
+        tensor_r_min_map: Dict[DensityInteraction, float],
+        tensor_r_max_map: Dict[DensityInteraction, float],
+        tensor_power_map: Dict[DensityInteraction, float],
+        tensor_eps_map: Dict[DensityInteraction, float],
+        tensor_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        tensor_cutoff_mode: str = "quintic",
+        supercell: ase.Atoms = None,
+        n_lead: int = 0,
+        n_trail: int = 0,
+        eps: float = 1e-8,
+        residualize: bool = True,
+        ) -> np.ndarray:
+    """Generate bond-projected tensor-modulated two-body energy features."""
+    if supercell is None:
+        supercell = geom
+    n_atoms = len(geom)
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    geo_positions = geom.get_positions()
+    sup_positions = supercell.get_positions()
+    rho, _, traceless, _, eps_values = local_tensor_anisotropy_by_interaction(
+        geom,
+        tensor_interactions,
+        tensor_r_min_map,
+        tensor_r_max_map,
+        tensor_power_map,
+        tensor_eps_map,
+        supercell=supercell,
+        default_eps=eps,
+        cutoff_on_map=tensor_cutoff_on_map,
+        cutoff_mode=tensor_cutoff_mode)
+    denom = rho + eps_values
+
+    blocks = []
+    for interaction in modulated_interactions:
+        pair = pair_map[interaction]
+        pair_numbers = ase_symbols.symbols2numbers(pair)
+        comp_mask = distances.mask_matrix_by_pair_interaction(
+            pair_numbers, geo_composition, sup_composition)
+        r_min = max(pair_r_min_map[pair], 0.0)
+        r_max = pair_r_max_map[pair]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = comp_mask & cut_mask
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        if len(rij) == 0:
+            blocks.append(np.zeros(len(basis_functions[pair])))
+            continue
+        delta = sup_positions[j_where] - geo_positions[i_where]
+        unit = delta / rij[:, None]
+        d_unit = np.einsum("nij,nj->ni", traceless[i_where], unit)
+        q_values = np.einsum("ni,ni->n", unit, d_unit) / denom[i_where]
+        if residualize:
+            counts = np.bincount(i_where, minlength=n_atoms).astype(float)
+            sums = np.bincount(i_where, weights=q_values, minlength=n_atoms)
+            means = np.divide(sums,
+                              counts,
+                              out=np.zeros_like(sums),
+                              where=counts > 0)
+            h_values = q_values - means[i_where]
+        else:
+            h_values = q_values
+        block = _weighted_basis_sum(rij,
+                                    h_values,
+                                    basis_functions[pair],
+                                    n_lead=n_lead,
+                                    n_trail=n_trail)
+        blocks.append(block)
+    return np.concatenate(blocks) if blocks else np.array([])
+
+
+def bond_tensor_modulated_pair_force_features(
+        geom: ase.Atoms,
+        modulated_interactions: List[DensityInteraction],
+        pair_map: Dict[DensityInteraction, Tuple[str, str]],
+        pair_r_min_map: Dict[Tuple[str, str], float],
+        pair_r_max_map: Dict[Tuple[str, str], float],
+        basis_functions: Dict[Tuple[str, str], List],
+        tensor_interactions: List[DensityInteraction],
+        tensor_r_min_map: Dict[DensityInteraction, float],
+        tensor_r_max_map: Dict[DensityInteraction, float],
+        tensor_power_map: Dict[DensityInteraction, float],
+        tensor_eps_map: Dict[DensityInteraction, float],
+        tensor_cutoff_on_map: Dict[DensityInteraction, float] | None = None,
+        tensor_cutoff_mode: str = "quintic",
+        supercell: ase.Atoms = None,
+        n_lead: int = 0,
+        n_trail: int = 0,
+        eps: float = 1e-8,
+        residualize: bool = True,
+        ) -> np.ndarray:
+    """Generate ``-d/dR`` force features for bond-projected tensor pairs."""
+    if supercell is None:
+        supercell = geom
+    n_atoms = len(geom)
+    distance_matrix = distances.get_distance_matrix(geom, supercell)
+    geo_composition = np.array(geom.get_atomic_numbers())
+    sup_composition = np.array(supercell.get_atomic_numbers())
+    geo_positions = geom.get_positions()
+    sup_positions = supercell.get_positions()
+    rho, _, traceless, _, eps_values = local_tensor_anisotropy_by_interaction(
+        geom,
+        tensor_interactions,
+        tensor_r_min_map,
+        tensor_r_max_map,
+        tensor_power_map,
+        tensor_eps_map,
+        supercell=supercell,
+        default_eps=eps,
+        cutoff_on_map=tensor_cutoff_on_map,
+        cutoff_mode=tensor_cutoff_mode)
+    denom = rho + eps_values
+
+    feature_blocks = []
+    eye = np.eye(3)
+    for interaction in modulated_interactions:
+        pair = pair_map[interaction]
+        pair_numbers = ase_symbols.symbols2numbers(pair)
+        comp_mask = distances.mask_matrix_by_pair_interaction(
+            pair_numbers, geo_composition, sup_composition)
+        r_min = max(pair_r_min_map[pair], 0.0)
+        r_max = pair_r_max_map[pair]
+        cut_mask = (distance_matrix > r_min) & (distance_matrix < r_max)
+        mask = comp_mask & cut_mask
+        i_where, j_where = np.where(mask)
+        rij = distance_matrix[i_where, j_where]
+        n_splines = len(basis_functions[pair])
+        block = np.zeros((n_atoms, 3, n_splines))
+        if len(rij) == 0:
+            feature_blocks.append(block)
+            continue
+        delta = sup_positions[j_where] - geo_positions[i_where]
+        unit = delta / rij[:, None]
+        tensor_projection = np.einsum("nij,nj->ni", traceless[i_where], unit)
+        u_d_u = np.einsum("ni,ni->n", unit, tensor_projection)
+        q_values = u_d_u / denom[i_where]
+        if residualize:
+            counts = np.bincount(i_where, minlength=n_atoms).astype(float)
+            sums = np.bincount(i_where, weights=q_values, minlength=n_atoms)
+            means = np.divide(sums,
+                              counts,
+                              out=np.zeros_like(sums),
+                              where=counts > 0)
+            h_values = q_values - means[i_where]
+        else:
+            counts = np.zeros(n_atoms)
+            h_values = q_values
+
+        for spline_idx in range(n_lead, n_splines - n_trail):
+            values = basis_functions[pair][spline_idx](rij, nu=0)
+            derivs = basis_functions[pair][spline_idx](rij, nu=1)
+            values[np.isnan(values)] = 0.0
+            derivs[np.isnan(derivs)] = 0.0
+
+            direct_vecs = h_values[:, None] * derivs[:, None] * unit
+            np.add.at(block[:, :, spline_idx], i_where, direct_vecs)
+            real_j = j_where < n_atoms
+            if np.any(real_j):
+                np.add.at(block[:, :, spline_idx],
+                          j_where[real_j],
+                          -direct_vecs[real_j])
+
+            if residualize:
+                sum_values = np.bincount(i_where,
+                                         weights=values,
+                                         minlength=n_atoms)
+                mean_values = np.divide(sum_values,
+                                        counts,
+                                        out=np.zeros_like(sum_values),
+                                        where=counts > 0)
+                g_edges = values - mean_values[i_where]
+            else:
+                g_edges = values
+
+            direct_q = (
+                2.0 * g_edges[:, None] / denom[i_where, None] *
+                (tensor_projection - u_d_u[:, None] * unit) / rij[:, None]
+            )
+            np.add.at(block[:, :, spline_idx], i_where, direct_q)
+            if np.any(real_j):
+                np.add.at(block[:, :, spline_idx],
+                          j_where[real_j],
+                          -direct_q[real_j])
+
+            adj_tensor = np.zeros((n_atoms, 3, 3))
+            adj_rho = np.zeros(n_atoms)
+            uu = unit[:, :, None] * unit[:, None, :]
+            np.add.at(adj_tensor,
+                      i_where,
+                      g_edges[:, None, None] *
+                      uu / denom[i_where, None, None])
+            np.add.at(adj_rho,
+                      i_where,
+                      -g_edges * u_d_u / (denom[i_where] ** 2))
+
+            for tensor_interaction in tensor_interactions:
+                center_z, neighbor_z = _numbers_from_interaction(
+                    tensor_interaction)
+                center_mask = geo_composition[:, None] == center_z
+                neighbor_mask = sup_composition[None, :] == neighbor_z
+                d_r_min = max(tensor_r_min_map[tensor_interaction], 0.0)
+                d_r_max = tensor_r_max_map[tensor_interaction]
+                d_cut = ((distance_matrix > d_r_min) &
+                         (distance_matrix < d_r_max))
+                d_mask = center_mask & neighbor_mask & d_cut
+                if not np.any(d_mask):
+                    continue
+                d_i, d_j = np.where(d_mask)
+                active = ((np.linalg.norm(adj_tensor[d_i].reshape(-1, 9),
+                                           axis=1) != 0.0) |
+                          (adj_rho[d_i] != 0.0))
+                if not np.any(active):
+                    continue
+                d_i = d_i[active]
+                d_j = d_j[active]
+                d_rij = distance_matrix[d_i, d_j]
+                d_delta = sup_positions[d_j] - geo_positions[d_i]
+                d_unit = d_delta / d_rij[:, None]
+                power = tensor_power_map[tensor_interaction]
+                cutoff_on = None
+                if tensor_cutoff_on_map is not None:
+                    cutoff_on = tensor_cutoff_on_map.get(
+                        tensor_interaction, None)
+                envelope, envelope_deriv = cutoff_envelope(
+                    d_rij, cutoff_on, d_r_max, tensor_cutoff_mode)
+                raw_weight = d_rij ** (-power)
+                raw_weight_prime = -power * d_rij ** (-power - 1.0)
+                weight = raw_weight * envelope
+                weight_prime = (
+                    raw_weight_prime * envelope
+                    + raw_weight * envelope_deriv
+                )
+
+                adj = adj_tensor[d_i]
+                adj_u = np.einsum("nij,nj->ni", adj, d_unit)
+                u_adj_u = np.einsum("ni,ni->n", d_unit, adj_u)
+                trace_adj = np.trace(adj, axis1=1, axis2=2)
+                radial_tensor = u_adj_u - trace_adj / 3.0
+                radial = radial_tensor + adj_rho[d_i]
+                angular = (
+                    2.0 * weight[:, None] / d_rij[:, None] *
+                    (adj_u - u_adj_u[:, None] * d_unit)
+                )
+                chain_vecs = weight_prime[:, None] * radial[:, None] * \
+                    d_unit + angular
                 np.add.at(block[:, :, spline_idx], d_i, chain_vecs)
                 real_d_j = d_j < n_atoms
                 if np.any(real_d_j):

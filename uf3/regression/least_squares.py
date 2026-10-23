@@ -231,6 +231,15 @@ class WeightedLinearModel(BasicLinearModel):
     def mask(self):
         return get_freezing_mask(self.n_feats, self.col_idx)
 
+    def reset_frozen_coefficients(self):
+        """Reset coefficient freezing to the basis-intrinsic trim mask."""
+        col_idx, frozen_c = self.bspline_config.generate_frozen_indices(
+            offset_1b=self.bspline_config.offset_1b,
+            n_lead=self.bspline_config.leading_trim,
+            n_trail=self.bspline_config.trailing_trim)
+        self.bspline_config.col_idx = col_idx
+        self.bspline_config.frozen_c = frozen_c
+
     def set_frozen_coefficients(self, indices, values=None):
         """Freeze selected coefficient columns before fitting."""
         indices = np.array(indices, dtype=int)
@@ -257,11 +266,183 @@ class WeightedLinearModel(BasicLinearModel):
         residual fits that train only a correction block.
         """
         indices = self.bspline_config.get_feature_group_indices(groups)
+        if len(indices) == 0:
+            raise ValueError(f"No feature columns matched groups: {groups}")
         if coefficients is None:
             values = np.zeros(len(indices))
         else:
             values = np.asarray(coefficients)[indices]
         self.set_frozen_coefficients(indices, values)
+
+    def freeze_all_except_feature_groups(self, groups, coefficients=None):
+        """
+        Freeze every coefficient outside the named feature groups.
+
+        Existing basis-intrinsic frozen coefficients, such as trimmed spline
+        endpoints, remain frozen even if they belong to a trainable group.
+        If coefficients are provided, frozen columns are fixed to those values;
+        otherwise they are fixed to zero.
+        """
+        train_indices = self.bspline_config.get_feature_group_indices(groups)
+        if len(train_indices) == 0:
+            raise ValueError(f"No feature columns matched groups: {groups}")
+        all_indices = np.arange(self.n_feats, dtype=int)
+        freeze_indices = np.setdiff1d(all_indices, train_indices)
+        if coefficients is None:
+            values = np.zeros(len(freeze_indices))
+        else:
+            values = np.asarray(coefficients)[freeze_indices]
+        self.set_frozen_coefficients(freeze_indices, values)
+
+    def configure_training_mode(self,
+                                mode="joint",
+                                train_groups=None,
+                                freeze_groups=None,
+                                baseline_model=None,
+                                baseline_filename=None,
+                                baseline_coefficients=None,
+                                reset_frozen=True):
+        """
+        Configure coefficient blocks for joint or residual training.
+
+        ``joint`` keeps all enabled, non-trimmed terms trainable by default.
+        If ``train_groups`` is provided, only those groups are trainable.  If
+        ``freeze_groups`` is provided, those groups are frozen.
+
+        ``residual`` loads a baseline coefficient vector and freezes every
+        group outside ``train_groups`` to the baseline values.  Subsequent calls
+        to ``fit`` or ``fit_from_file`` then fit only the active correction
+        blocks to the residual target created by subtracting the frozen
+        baseline contribution.
+
+        Args:
+            mode (str): ``"joint"`` or ``"residual"``.
+            train_groups (str or list): feature groups to train. Required for
+                residual mode; optional for restricted joint fits.
+            freeze_groups (str or list): feature groups to freeze in joint
+                mode.
+            baseline_model (WeightedLinearModel): source model for residual
+                coefficients.
+            baseline_filename (str): JSON model path for residual
+                coefficients.
+            baseline_coefficients (np.ndarray): explicit coefficient vector
+                for residual coefficients.
+            reset_frozen (bool): restore intrinsic trim freezing before
+                applying the requested mode.
+
+        Returns:
+            dict: summary of the configured mode and train/frozen counts.
+        """
+        mode = str(mode).lower()
+        if mode not in {"joint", "residual"}:
+            raise ValueError("Training mode must be 'joint' or 'residual'.")
+        if reset_frozen:
+            self.reset_frozen_coefficients()
+        if baseline_filename is not None:
+            if baseline_model is not None:
+                raise ValueError("Provide only one of baseline_model or "
+                                 "baseline_filename.")
+            baseline_model = WeightedLinearModel.from_json(baseline_filename)
+
+        if mode == "joint":
+            if baseline_coefficients is not None:
+                self.coefficients = np.asarray(baseline_coefficients,
+                                               dtype=float).copy()
+            elif baseline_model is not None:
+                self.initialize_from_model(baseline_model)
+            reference = self.coefficients
+            if train_groups is not None and freeze_groups is not None:
+                raise ValueError("Use either train_groups or freeze_groups, "
+                                 "not both.")
+            if train_groups is not None:
+                self.freeze_all_except_feature_groups(train_groups,
+                                                      coefficients=reference)
+            elif freeze_groups is not None:
+                self.freeze_feature_groups(freeze_groups,
+                                           coefficients=reference)
+        else:
+            if train_groups is None:
+                raise ValueError("Residual mode requires train_groups.")
+            if baseline_coefficients is not None:
+                baseline_coefficients = np.asarray(baseline_coefficients,
+                                                   dtype=float)
+                if len(baseline_coefficients) != self.n_feats:
+                    raise ValueError("baseline_coefficients length does not "
+                                     "match the active basis.")
+                self.coefficients = baseline_coefficients.copy()
+            elif baseline_model is not None:
+                self.initialize_from_model(baseline_model)
+            elif self.coefficients is None:
+                raise ValueError("Residual mode requires baseline_model, "
+                                 "baseline_filename, baseline_coefficients, "
+                                 "or preloaded coefficients.")
+            self.freeze_all_except_feature_groups(train_groups,
+                                                  coefficients=self.coefficients)
+
+        n_trainable = int(self.n_feats - len(self.col_idx))
+        if n_trainable == 0:
+            raise ValueError("Training mode leaves no trainable coefficients.")
+
+        return {
+            "mode": mode,
+            "train_groups": train_groups,
+            "freeze_groups": freeze_groups,
+            "n_features": int(self.n_feats),
+            "n_frozen": int(len(self.col_idx)),
+            "n_trainable": n_trainable,
+        }
+
+    def fit_residual(self,
+                     x_e: np.ndarray,
+                     y_e: np.ndarray,
+                     train_groups,
+                     baseline_model=None,
+                     baseline_filename=None,
+                     baseline_coefficients=None,
+                     x_f: np.ndarray = None,
+                     y_f: np.ndarray = None,
+                     weight: float = 0.5,
+                     batch_size=2500):
+        """Configure residual mode and fit active correction groups."""
+        summary = self.configure_training_mode(
+            mode="residual",
+            train_groups=train_groups,
+            baseline_model=baseline_model,
+            baseline_filename=baseline_filename,
+            baseline_coefficients=baseline_coefficients)
+        self.fit(x_e, y_e, x_f=x_f, y_f=y_f, weight=weight,
+                 batch_size=batch_size)
+        return summary
+
+    def fit_from_file_residual(self,
+                               filename: str,
+                               subset: Collection,
+                               train_groups,
+                               baseline_model=None,
+                               baseline_filename=None,
+                               baseline_coefficients=None,
+                               weight: float = 0.5,
+                               batch_size=2500,
+                               sample_weights: Dict = None,
+                               energy_key="energy",
+                               progress: str = "bar",
+                               drop_columns: List[str] = None):
+        """Configure residual mode and fit active groups from HDF5 features."""
+        summary = self.configure_training_mode(
+            mode="residual",
+            train_groups=train_groups,
+            baseline_model=baseline_model,
+            baseline_filename=baseline_filename,
+            baseline_coefficients=baseline_coefficients)
+        self.fit_from_file(filename,
+                           subset,
+                           weight=weight,
+                           batch_size=batch_size,
+                           sample_weights=sample_weights,
+                           energy_key=energy_key,
+                           progress=progress,
+                           drop_columns=drop_columns)
+        return summary
 
     def initialize_from_model(self, model):
         """
@@ -617,6 +798,9 @@ class WeightedLinearModel(BasicLinearModel):
             "density_modulated_2b",
             "density_modulated_3b",
             "dipole_modulated_2b",
+            "bond_dipole_modulated_2b",
+            "tensor_modulated_2b",
+            "bond_tensor_modulated_2b",
         }
         for key in list(solution):
             if isinstance(key, tuple) and key[0] not in scalar_prefixes:
@@ -721,6 +905,42 @@ class WeightedLinearModel(BasicLinearModel):
                         f"Incorrect shape: {interaction}, "
                         f"{n_provided} != {n_target}"
                     )
+        if self.bspline_config.bond_dipole_modulated_2b_enabled:
+            for interaction in self.bspline_config.bond_dipole_modulated_2b_interactions:
+                n_target = component_len[interaction]
+                if interaction not in solution:
+                    warnings.warn(f"{interaction} not provided.")
+                    solution[interaction] = np.zeros(n_target)
+                n_provided = len(np.atleast_1d(solution[interaction]))
+                if n_provided != n_target:
+                    raise ValueError(
+                        f"Incorrect shape: {interaction}, "
+                        f"{n_provided} != {n_target}"
+                    )
+        if self.bspline_config.tensor_modulated_2b_enabled:
+            for interaction in self.bspline_config.tensor_modulated_2b_interactions:
+                n_target = component_len[interaction]
+                if interaction not in solution:
+                    warnings.warn(f"{interaction} not provided.")
+                    solution[interaction] = np.zeros(n_target)
+                n_provided = len(np.atleast_1d(solution[interaction]))
+                if n_provided != n_target:
+                    raise ValueError(
+                        f"Incorrect shape: {interaction}, "
+                        f"{n_provided} != {n_target}"
+                    )
+        if self.bspline_config.bond_tensor_modulated_2b_enabled:
+            for interaction in self.bspline_config.bond_tensor_modulated_2b_interactions:
+                n_target = component_len[interaction]
+                if interaction not in solution:
+                    warnings.warn(f"{interaction} not provided.")
+                    solution[interaction] = np.zeros(n_target)
+                n_provided = len(np.atleast_1d(solution[interaction]))
+                if n_provided != n_target:
+                    raise ValueError(
+                        f"Incorrect shape: {interaction}, "
+                        f"{n_provided} != {n_target}"
+                    )
         for pair in self.bspline_config.interactions_map[2]:
             n_target = component_len[pair]
             if pair not in solution:
@@ -782,6 +1002,18 @@ class WeightedLinearModel(BasicLinearModel):
                 flattened_coefficients.append(values)
         if self.bspline_config.dipole_modulated_2b_enabled:
             for interaction in self.bspline_config.dipole_modulated_2b_interactions:
+                values = np.atleast_1d(solution[interaction])
+                flattened_coefficients.append(values)
+        if self.bspline_config.bond_dipole_modulated_2b_enabled:
+            for interaction in self.bspline_config.bond_dipole_modulated_2b_interactions:
+                values = np.atleast_1d(solution[interaction])
+                flattened_coefficients.append(values)
+        if self.bspline_config.tensor_modulated_2b_enabled:
+            for interaction in self.bspline_config.tensor_modulated_2b_interactions:
+                values = np.atleast_1d(solution[interaction])
+                flattened_coefficients.append(values)
+        if self.bspline_config.bond_tensor_modulated_2b_enabled:
+            for interaction in self.bspline_config.bond_tensor_modulated_2b_interactions:
                 values = np.atleast_1d(solution[interaction])
                 flattened_coefficients.append(values)
         for degree in range(2, self.bspline_config.degree + 1):
@@ -1282,6 +1514,18 @@ def arrange_coefficients(coefficients, bspline_config):
         for interaction in bspline_config.dipole_modulated_2b_interactions:
             solutions[interaction] = solutions_list[j]
             j += 1
+    if bspline_config.bond_dipole_modulated_2b_enabled:
+        for interaction in bspline_config.bond_dipole_modulated_2b_interactions:
+            solutions[interaction] = solutions_list[j]
+            j += 1
+    if bspline_config.tensor_modulated_2b_enabled:
+        for interaction in bspline_config.tensor_modulated_2b_interactions:
+            solutions[interaction] = solutions_list[j]
+            j += 1
+    if bspline_config.bond_tensor_modulated_2b_enabled:
+        for interaction in bspline_config.bond_tensor_modulated_2b_interactions:
+            solutions[interaction] = solutions_list[j]
+            j += 1
     for d in range(2, bspline_config.degree + 1):
         interactions_map = bspline_config.interactions_map[d]
         for interaction in interactions_map:
@@ -1307,6 +1551,12 @@ def normalize_scalar_descriptor_keys(solution):
         elif prefix == "density_modulated_2b" and len(key) == 4:
             normalized[(prefix, str(key[1]), str(key[2]), str(key[3]))] = value
         elif prefix == "dipole_modulated_2b" and len(key) == 3:
+            normalized[(prefix, str(key[1]), str(key[2]))] = value
+        elif prefix == "bond_dipole_modulated_2b" and len(key) == 3:
+            normalized[(prefix, str(key[1]), str(key[2]))] = value
+        elif prefix == "tensor_modulated_2b" and len(key) == 3:
+            normalized[(prefix, str(key[1]), str(key[2]))] = value
+        elif prefix == "bond_tensor_modulated_2b" and len(key) == 3:
             normalized[(prefix, str(key[1]), str(key[2]))] = value
         else:
             normalized[key] = value

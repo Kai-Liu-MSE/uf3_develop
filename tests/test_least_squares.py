@@ -120,6 +120,66 @@ def test_singlepoint_fit_from_file():
                         subset=['0_0'])
     assert sum(~np.isfinite(model.coefficients)) == 0  # no nan or inf
 
+
+def test_residual_training_mode_fits_only_requested_group():
+    chemical_system = composition.ChemicalSystem(["Al"], degree=2)
+    bspline_config = bspline.BSplineBasis(
+        chemical_system,
+        leading_trim=0,
+        trailing_trim=0,
+        density_modulated_2b_enabled=True,
+        density_modulated_2b_r_min_map={("Al", "Al"): 0.1},
+        density_modulated_2b_r_max_map={("Al", "Al"): 5.0},
+        density_modulated_2b_rho_bulk_map={("Al", "Al"): 1.0})
+    n_features = sum(bspline_config.partition_sizes)
+    rng = np.random.RandomState(0)
+    x_e = rng.normal(size=(200, n_features))
+
+    idx_2rho = bspline_config.get_feature_group_indices("2rho")
+    idx_base = np.setdiff1d(np.arange(n_features), idx_2rho)
+    baseline_coefficients = rng.normal(size=n_features)
+    baseline_coefficients[idx_2rho] = 0.0
+    correction_coefficients = np.zeros(n_features)
+    correction_coefficients[idx_2rho] = rng.normal(size=len(idx_2rho))
+    y_e = np.dot(x_e, baseline_coefficients + correction_coefficients)
+
+    model = least_squares.WeightedLinearModel(
+        bspline_config,
+        regularizer=np.eye(n_features) * 1e-12)
+    model.fit_residual(x_e,
+                       y_e,
+                       train_groups="2rho",
+                       baseline_coefficients=baseline_coefficients)
+
+    assert np.allclose(model.coefficients[idx_base],
+                       baseline_coefficients[idx_base])
+    assert np.allclose(model.coefficients[idx_2rho],
+                       correction_coefficients[idx_2rho])
+    assert np.allclose(model.predict(x_e), y_e)
+
+
+def test_joint_training_mode_can_restrict_trainable_groups():
+    chemical_system = composition.ChemicalSystem(["Al"], degree=2)
+    bspline_config = bspline.BSplineBasis(
+        chemical_system,
+        leading_trim=0,
+        trailing_trim=0,
+        density_modulated_2b_enabled=True,
+        density_modulated_2b_r_min_map={("Al", "Al"): 0.1},
+        density_modulated_2b_r_max_map={("Al", "Al"): 5.0},
+        density_modulated_2b_rho_bulk_map={("Al", "Al"): 1.0})
+    model = least_squares.WeightedLinearModel(bspline_config)
+
+    summary = model.configure_training_mode("joint", train_groups=["2rho"])
+    idx_2rho = bspline_config.get_feature_group_indices("2rho")
+    idx_base = bspline_config.get_feature_group_indices(["1b", "2b"])
+
+    assert summary["mode"] == "joint"
+    assert summary["n_trainable"] == len(idx_2rho)
+    assert set(idx_base).issubset(set(model.col_idx))
+    assert not set(idx_2rho).intersection(set(model.col_idx))
+
+
 def test_loss_function():
     chemical_system = composition.ChemicalSystem(["Al"], degree=2)
     # Don't trim columns for this test

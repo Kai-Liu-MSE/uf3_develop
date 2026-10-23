@@ -68,10 +68,11 @@ class BSplineBasis:
                  density_modulated_2b_r_max_map=None,
                  density_modulated_2b_power_map=None,
                  density_modulated_2b_power=1.0,
+                 density_modulated_2b_weight_map=None,
                  density_modulated_2b_rho_bulk_map=None,
                  density_modulated_2b_rho_bulk=1.0,
                  density_modulated_2b_modulation="conservative",
-                 density_modulated_2b_cutoff_mode="hard",
+                 density_modulated_2b_cutoff_mode="quintic",
                  density_modulated_2b_cutoff_on_map=None,
                  density_modulated_2b_cutoff_on=None,
                  density_modulated_3b_enabled=False,
@@ -83,7 +84,7 @@ class BSplineBasis:
                  density_modulated_3b_rho_bulk_map=None,
                  density_modulated_3b_rho_bulk=1.0,
                  density_modulated_3b_modulation="conservative",
-                 density_modulated_3b_cutoff_mode="hard",
+                 density_modulated_3b_cutoff_mode="quintic",
                  density_modulated_3b_cutoff_on_map=None,
                  density_modulated_3b_cutoff_on=None,
                  dipole_modulated_2b_enabled=False,
@@ -92,7 +93,42 @@ class BSplineBasis:
                  dipole_modulated_2b_power_map=None,
                  dipole_modulated_2b_power=1.0,
                  dipole_modulated_2b_eps_map=None,
-                 dipole_modulated_2b_eps=1e-8):
+                 dipole_modulated_2b_eps=1e-8,
+                 dipole_modulated_2b_cutoff_mode="quintic",
+                 dipole_modulated_2b_cutoff_on_map=None,
+                 dipole_modulated_2b_cutoff_on=None,
+                 bond_dipole_modulated_2b_enabled=False,
+                 bond_dipole_modulated_2b_r_min_map=None,
+                 bond_dipole_modulated_2b_r_max_map=None,
+                 bond_dipole_modulated_2b_power_map=None,
+                 bond_dipole_modulated_2b_power=1.0,
+                 bond_dipole_modulated_2b_eps_map=None,
+                 bond_dipole_modulated_2b_eps=1e-8,
+                 bond_dipole_modulated_2b_cutoff_mode="quintic",
+                 bond_dipole_modulated_2b_cutoff_on_map=None,
+                 bond_dipole_modulated_2b_cutoff_on=None,
+                 bond_dipole_modulated_2b_residualize=True,
+                 tensor_modulated_2b_enabled=False,
+                 tensor_modulated_2b_r_min_map=None,
+                 tensor_modulated_2b_r_max_map=None,
+                 tensor_modulated_2b_power_map=None,
+                 tensor_modulated_2b_power=1.0,
+                 tensor_modulated_2b_eps_map=None,
+                 tensor_modulated_2b_eps=1e-8,
+                 tensor_modulated_2b_cutoff_mode="quintic",
+                 tensor_modulated_2b_cutoff_on_map=None,
+                 tensor_modulated_2b_cutoff_on=None,
+                 bond_tensor_modulated_2b_enabled=False,
+                 bond_tensor_modulated_2b_r_min_map=None,
+                 bond_tensor_modulated_2b_r_max_map=None,
+                 bond_tensor_modulated_2b_power_map=None,
+                 bond_tensor_modulated_2b_power=1.0,
+                 bond_tensor_modulated_2b_eps_map=None,
+                 bond_tensor_modulated_2b_eps=1e-8,
+                 bond_tensor_modulated_2b_cutoff_mode="quintic",
+                 bond_tensor_modulated_2b_cutoff_on_map=None,
+                 bond_tensor_modulated_2b_cutoff_on=None,
+                 bond_tensor_modulated_2b_residualize=True):
         """
         Args:
             chemical_system (uf3.data.composition.ChemicalSystem)
@@ -221,11 +257,12 @@ class BSplineBasis:
         self.density_modulated_2b_r_min_map = {}
         self.density_modulated_2b_r_max_map = {}
         self.density_modulated_2b_power_map = {}
+        self.density_modulated_2b_weight_map = {}
         self.density_modulated_2b_rho_bulk_map = {}
         self.density_modulated_2b_cutoff_on_map = {}
         self.density_modulated_2b_modulation = str(
             density_modulated_2b_modulation)
-        self.density_modulated_2b_cutoff_mode = str(
+        self.density_modulated_2b_cutoff_mode = smooth_density_cutoff_mode(
             density_modulated_2b_cutoff_mode)
         self.update_density_modulated_2b_settings(
             density_modulated_2b_r_min_map,
@@ -235,7 +272,8 @@ class BSplineBasis:
             density_modulated_2b_rho_bulk_map,
             density_modulated_2b_rho_bulk,
             density_modulated_2b_cutoff_on_map,
-            density_modulated_2b_cutoff_on)
+            density_modulated_2b_cutoff_on,
+            density_modulated_2b_weight_map)
         self.density_modulated_3b_enabled = bool(density_modulated_3b_enabled)
         self.density_modulated_3b_alphas = (
             [0.5] if density_modulated_3b_alphas is None
@@ -252,7 +290,7 @@ class BSplineBasis:
         self.density_modulated_3b_cutoff_on_map = {}
         self.density_modulated_3b_modulation = str(
             density_modulated_3b_modulation)
-        self.density_modulated_3b_cutoff_mode = str(
+        self.density_modulated_3b_cutoff_mode = smooth_density_cutoff_mode(
             density_modulated_3b_cutoff_mode)
         self.update_density_modulated_3b_settings(
             density_modulated_3b_r_min_map,
@@ -271,13 +309,84 @@ class BSplineBasis:
         self.dipole_modulated_2b_r_max_map = {}
         self.dipole_modulated_2b_power_map = {}
         self.dipole_modulated_2b_eps_map = {}
+        self.dipole_modulated_2b_cutoff_on_map = {}
+        self.dipole_modulated_2b_cutoff_mode = smooth_density_cutoff_mode(
+            dipole_modulated_2b_cutoff_mode)
         self.update_dipole_modulated_2b_settings(
             dipole_modulated_2b_r_min_map,
             dipole_modulated_2b_r_max_map,
             dipole_modulated_2b_power_map,
             dipole_modulated_2b_power,
             dipole_modulated_2b_eps_map,
-            dipole_modulated_2b_eps)
+            dipole_modulated_2b_eps,
+            dipole_modulated_2b_cutoff_on_map,
+            dipole_modulated_2b_cutoff_on)
+        self.bond_dipole_modulated_2b_enabled = bool(
+            bond_dipole_modulated_2b_enabled)
+        self.bond_dipole_modulated_2b_residualize = bool(
+            bond_dipole_modulated_2b_residualize)
+        self.bond_dipole_modulated_2b_interactions = []
+        self.bond_dipole_modulated_2b_dipole_interactions = []
+        self.bond_dipole_modulated_2b_pair_map = {}
+        self.bond_dipole_modulated_2b_r_min_map = {}
+        self.bond_dipole_modulated_2b_r_max_map = {}
+        self.bond_dipole_modulated_2b_power_map = {}
+        self.bond_dipole_modulated_2b_eps_map = {}
+        self.bond_dipole_modulated_2b_cutoff_on_map = {}
+        self.bond_dipole_modulated_2b_cutoff_mode = smooth_density_cutoff_mode(
+            bond_dipole_modulated_2b_cutoff_mode)
+        self.update_bond_dipole_modulated_2b_settings(
+            bond_dipole_modulated_2b_r_min_map,
+            bond_dipole_modulated_2b_r_max_map,
+            bond_dipole_modulated_2b_power_map,
+            bond_dipole_modulated_2b_power,
+            bond_dipole_modulated_2b_eps_map,
+            bond_dipole_modulated_2b_eps,
+            bond_dipole_modulated_2b_cutoff_on_map,
+            bond_dipole_modulated_2b_cutoff_on)
+        self.tensor_modulated_2b_enabled = bool(tensor_modulated_2b_enabled)
+        self.tensor_modulated_2b_interactions = []
+        self.tensor_modulated_2b_tensor_interactions = []
+        self.tensor_modulated_2b_pair_map = {}
+        self.tensor_modulated_2b_r_min_map = {}
+        self.tensor_modulated_2b_r_max_map = {}
+        self.tensor_modulated_2b_power_map = {}
+        self.tensor_modulated_2b_eps_map = {}
+        self.tensor_modulated_2b_cutoff_on_map = {}
+        self.tensor_modulated_2b_cutoff_mode = smooth_density_cutoff_mode(
+            tensor_modulated_2b_cutoff_mode)
+        self.update_tensor_modulated_2b_settings(
+            tensor_modulated_2b_r_min_map,
+            tensor_modulated_2b_r_max_map,
+            tensor_modulated_2b_power_map,
+            tensor_modulated_2b_power,
+            tensor_modulated_2b_eps_map,
+            tensor_modulated_2b_eps,
+            tensor_modulated_2b_cutoff_on_map,
+            tensor_modulated_2b_cutoff_on)
+        self.bond_tensor_modulated_2b_enabled = bool(
+            bond_tensor_modulated_2b_enabled)
+        self.bond_tensor_modulated_2b_interactions = []
+        self.bond_tensor_modulated_2b_tensor_interactions = []
+        self.bond_tensor_modulated_2b_pair_map = {}
+        self.bond_tensor_modulated_2b_r_min_map = {}
+        self.bond_tensor_modulated_2b_r_max_map = {}
+        self.bond_tensor_modulated_2b_power_map = {}
+        self.bond_tensor_modulated_2b_eps_map = {}
+        self.bond_tensor_modulated_2b_cutoff_on_map = {}
+        self.bond_tensor_modulated_2b_cutoff_mode = smooth_density_cutoff_mode(
+            bond_tensor_modulated_2b_cutoff_mode)
+        self.bond_tensor_modulated_2b_residualize = bool(
+            bond_tensor_modulated_2b_residualize)
+        self.update_bond_tensor_modulated_2b_settings(
+            bond_tensor_modulated_2b_r_min_map,
+            bond_tensor_modulated_2b_r_max_map,
+            bond_tensor_modulated_2b_power_map,
+            bond_tensor_modulated_2b_power,
+            bond_tensor_modulated_2b_eps_map,
+            bond_tensor_modulated_2b_eps,
+            bond_tensor_modulated_2b_cutoff_on_map,
+            bond_tensor_modulated_2b_cutoff_on)
         self.knot_spacer = get_knot_spacer(self.knot_strategy)
         self.update_basis_functions()
 
@@ -349,6 +458,7 @@ class BSplineBasis:
                 "density_modulated_2b_r_min_map",
                 "density_modulated_2b_r_max_map",
                 "density_modulated_2b_power_map",
+                "density_modulated_2b_weight_map",
                 "density_modulated_2b_power",
                 "density_modulated_2b_rho_bulk_map",
                 "density_modulated_2b_rho_bulk",
@@ -374,7 +484,42 @@ class BSplineBasis:
                 "dipole_modulated_2b_power_map",
                 "dipole_modulated_2b_power",
                 "dipole_modulated_2b_eps_map",
-                "dipole_modulated_2b_eps"]
+                "dipole_modulated_2b_eps",
+                "dipole_modulated_2b_cutoff_mode",
+                "dipole_modulated_2b_cutoff_on_map",
+                "dipole_modulated_2b_cutoff_on",
+                "bond_dipole_modulated_2b_enabled",
+                "bond_dipole_modulated_2b_r_min_map",
+                "bond_dipole_modulated_2b_r_max_map",
+                "bond_dipole_modulated_2b_power_map",
+                "bond_dipole_modulated_2b_power",
+                "bond_dipole_modulated_2b_eps_map",
+                "bond_dipole_modulated_2b_eps",
+                "bond_dipole_modulated_2b_cutoff_mode",
+                "bond_dipole_modulated_2b_cutoff_on_map",
+                "bond_dipole_modulated_2b_cutoff_on",
+                "bond_dipole_modulated_2b_residualize",
+                "tensor_modulated_2b_enabled",
+                "tensor_modulated_2b_r_min_map",
+                "tensor_modulated_2b_r_max_map",
+                "tensor_modulated_2b_power_map",
+                "tensor_modulated_2b_power",
+                "tensor_modulated_2b_eps_map",
+                "tensor_modulated_2b_eps",
+                "tensor_modulated_2b_cutoff_mode",
+                "tensor_modulated_2b_cutoff_on_map",
+                "tensor_modulated_2b_cutoff_on",
+                "bond_tensor_modulated_2b_enabled",
+                "bond_tensor_modulated_2b_r_min_map",
+                "bond_tensor_modulated_2b_r_max_map",
+                "bond_tensor_modulated_2b_power_map",
+                "bond_tensor_modulated_2b_power",
+                "bond_tensor_modulated_2b_eps_map",
+                "bond_tensor_modulated_2b_eps",
+                "bond_tensor_modulated_2b_cutoff_mode",
+                "bond_tensor_modulated_2b_cutoff_on_map",
+                "bond_tensor_modulated_2b_cutoff_on",
+                "bond_tensor_modulated_2b_residualize"]
         basis_settings.update({k: v for k, v in config.items() if k in keys})
 
         # The keys of leading/trailing trims are stored as strings in JSON
@@ -428,6 +573,7 @@ class BSplineBasis:
                     density_modulated_2b_r_min_map=self.density_modulated_2b_r_min_map,
                     density_modulated_2b_r_max_map=self.density_modulated_2b_r_max_map,
                     density_modulated_2b_power_map=self.density_modulated_2b_power_map,
+                    density_modulated_2b_weight_map=self.density_modulated_2b_weight_map,
                     density_modulated_2b_rho_bulk_map=self.density_modulated_2b_rho_bulk_map,
                     density_modulated_2b_modulation=self.density_modulated_2b_modulation,
                     density_modulated_2b_cutoff_mode=self.density_modulated_2b_cutoff_mode,
@@ -446,6 +592,31 @@ class BSplineBasis:
                     dipole_modulated_2b_r_max_map=self.dipole_modulated_2b_r_max_map,
                     dipole_modulated_2b_power_map=self.dipole_modulated_2b_power_map,
                     dipole_modulated_2b_eps_map=self.dipole_modulated_2b_eps_map,
+                    dipole_modulated_2b_cutoff_mode=self.dipole_modulated_2b_cutoff_mode,
+                    dipole_modulated_2b_cutoff_on_map=self.dipole_modulated_2b_cutoff_on_map,
+                    bond_dipole_modulated_2b_enabled=self.bond_dipole_modulated_2b_enabled,
+                    bond_dipole_modulated_2b_r_min_map=self.bond_dipole_modulated_2b_r_min_map,
+                    bond_dipole_modulated_2b_r_max_map=self.bond_dipole_modulated_2b_r_max_map,
+                    bond_dipole_modulated_2b_power_map=self.bond_dipole_modulated_2b_power_map,
+                    bond_dipole_modulated_2b_eps_map=self.bond_dipole_modulated_2b_eps_map,
+                    bond_dipole_modulated_2b_cutoff_mode=self.bond_dipole_modulated_2b_cutoff_mode,
+                    bond_dipole_modulated_2b_cutoff_on_map=self.bond_dipole_modulated_2b_cutoff_on_map,
+                    bond_dipole_modulated_2b_residualize=self.bond_dipole_modulated_2b_residualize,
+                    tensor_modulated_2b_enabled=self.tensor_modulated_2b_enabled,
+                    tensor_modulated_2b_r_min_map=self.tensor_modulated_2b_r_min_map,
+                    tensor_modulated_2b_r_max_map=self.tensor_modulated_2b_r_max_map,
+                    tensor_modulated_2b_power_map=self.tensor_modulated_2b_power_map,
+                    tensor_modulated_2b_eps_map=self.tensor_modulated_2b_eps_map,
+                    tensor_modulated_2b_cutoff_mode=self.tensor_modulated_2b_cutoff_mode,
+                    tensor_modulated_2b_cutoff_on_map=self.tensor_modulated_2b_cutoff_on_map,
+                    bond_tensor_modulated_2b_enabled=self.bond_tensor_modulated_2b_enabled,
+                    bond_tensor_modulated_2b_r_min_map=self.bond_tensor_modulated_2b_r_min_map,
+                    bond_tensor_modulated_2b_r_max_map=self.bond_tensor_modulated_2b_r_max_map,
+                    bond_tensor_modulated_2b_power_map=self.bond_tensor_modulated_2b_power_map,
+                    bond_tensor_modulated_2b_eps_map=self.bond_tensor_modulated_2b_eps_map,
+                    bond_tensor_modulated_2b_cutoff_mode=self.bond_tensor_modulated_2b_cutoff_mode,
+                    bond_tensor_modulated_2b_cutoff_on_map=self.bond_tensor_modulated_2b_cutoff_on_map,
+                    bond_tensor_modulated_2b_residualize=self.bond_tensor_modulated_2b_residualize,
                     **self.chemical_system.as_dict())
         return dump
 
@@ -469,7 +640,10 @@ class BSplineBasis:
                 self.local_composition_enabled or
                 self.density_modulated_2b_enabled or
                 self.density_modulated_3b_enabled or
-                self.dipole_modulated_2b_enabled):
+                self.dipole_modulated_2b_enabled or
+                self.bond_dipole_modulated_2b_enabled or
+                self.tensor_modulated_2b_enabled or
+                self.bond_tensor_modulated_2b_enabled):
             interactions = list(self.element_list)
             if self.density_enabled:
                 interactions.extend(self.density_interactions)
@@ -487,6 +661,12 @@ class BSplineBasis:
                 interactions.extend(self.density_modulated_3b_interactions)
             if self.dipole_modulated_2b_enabled:
                 interactions.extend(self.dipole_modulated_2b_interactions)
+            if self.bond_dipole_modulated_2b_enabled:
+                interactions.extend(self.bond_dipole_modulated_2b_interactions)
+            if self.tensor_modulated_2b_enabled:
+                interactions.extend(self.tensor_modulated_2b_interactions)
+            if self.bond_tensor_modulated_2b_enabled:
+                interactions.extend(self.bond_tensor_modulated_2b_interactions)
             for degree in range(2, self.degree + 1):
                 interactions.extend(list(self.interactions_map[degree]))
             return interactions
@@ -540,6 +720,12 @@ class BSplineBasis:
             values.extend(self.density_modulated_3b_r_max_map.values())
         if getattr(self, "dipole_modulated_2b_enabled", False):
             values.extend(self.dipole_modulated_2b_r_max_map.values())
+        if getattr(self, "bond_dipole_modulated_2b_enabled", False):
+            values.extend(self.bond_dipole_modulated_2b_r_max_map.values())
+        if getattr(self, "tensor_modulated_2b_enabled", False):
+            values.extend(self.tensor_modulated_2b_r_max_map.values())
+        if getattr(self, "bond_tensor_modulated_2b_enabled", False):
+            values.extend(self.bond_tensor_modulated_2b_r_max_map.values())
         return max(values)
 
     def update_density_settings(self,
@@ -708,7 +894,8 @@ class BSplineBasis:
                                              rho_bulk_map=None,
                                              default_rho_bulk=1.0,
                                              cutoff_on_map=None,
-                                             default_cutoff_on=None):
+                                             default_cutoff_on=None,
+                                             weight_map=None):
         """Set density-conditioned two-body correction metadata."""
         if not self.density_modulated_2b_enabled:
             self.density_modulated_2b_interactions = []
@@ -724,11 +911,14 @@ class BSplineBasis:
             rho_bulk_map = {}
         if cutoff_on_map is None:
             cutoff_on_map = {}
+        if weight_map is None:
+            weight_map = {}
         r_min_map = format_density_map_keys(r_min_map)
         r_max_map = format_density_map_keys(r_max_map)
         power_map = format_density_map_keys(power_map)
         rho_bulk_map = format_density_map_keys(rho_bulk_map)
         cutoff_on_map = format_density_map_keys(cutoff_on_map)
+        weight_map = format_density_map_keys(weight_map)
         self.density_modulated_2b_density_interactions = \
             density.get_density_interactions(self.element_list)
         for interaction in self.density_modulated_2b_density_interactions:
@@ -740,13 +930,17 @@ class BSplineBasis:
             self.density_modulated_2b_r_max_map[interaction] = r_max
             self.density_modulated_2b_power_map[interaction] = float(
                 power_map.get(interaction, power_map.get(pair, default_power)))
+            weight = float(weight_map.get(interaction, weight_map.get(pair, 1.0)))
+            if not np.isfinite(weight) or weight < 0.0:
+                raise ValueError("2rho density weights must be finite and nonnegative")
+            self.density_modulated_2b_weight_map[interaction] = weight
             rho_bulk = rho_bulk_map.get(
                 interaction, rho_bulk_map.get(pair, default_rho_bulk))
             self.density_modulated_2b_rho_bulk_map[interaction] = float(rho_bulk)
             cutoff_on = cutoff_on_map.get(
                 interaction, cutoff_on_map.get(pair, default_cutoff_on))
             if cutoff_on is None:
-                cutoff_on = r_max
+                cutoff_on = density.default_cutoff_on(r_max)
             self.density_modulated_2b_cutoff_on_map[interaction] = float(cutoff_on)
 
         interactions = []
@@ -810,7 +1004,7 @@ class BSplineBasis:
             cutoff_on = cutoff_on_map.get(
                 interaction, cutoff_on_map.get(pair, default_cutoff_on))
             if cutoff_on is None:
-                cutoff_on = r_max
+                cutoff_on = density.default_cutoff_on(r_max)
             self.density_modulated_3b_cutoff_on_map[interaction] = float(cutoff_on)
 
         interactions = []
@@ -834,7 +1028,9 @@ class BSplineBasis:
                                             power_map=None,
                                             default_power=1.0,
                                             eps_map=None,
-                                            default_eps=1e-8):
+                                            default_eps=1e-8,
+                                            cutoff_on_map=None,
+                                            default_cutoff_on=None):
         """Set dipole-asymmetry-conditioned two-body metadata."""
         if not self.dipole_modulated_2b_enabled:
             self.dipole_modulated_2b_interactions = []
@@ -848,22 +1044,31 @@ class BSplineBasis:
             power_map = {}
         if eps_map is None:
             eps_map = {}
+        if cutoff_on_map is None:
+            cutoff_on_map = {}
         r_min_map = format_density_map_keys(r_min_map)
         r_max_map = format_density_map_keys(r_max_map)
         power_map = format_density_map_keys(power_map)
         eps_map = format_density_map_keys(eps_map)
+        cutoff_on_map = format_density_map_keys(cutoff_on_map)
         self.dipole_modulated_2b_dipole_interactions = \
             density.get_density_interactions(self.element_list)
         for interaction in self.dipole_modulated_2b_dipole_interactions:
             pair = interaction[1:]
+            r_max = r_max_map.get(
+                interaction, r_max_map.get(pair, self.r_max_map.get(pair, 6.0)))
             self.dipole_modulated_2b_r_min_map[interaction] = r_min_map.get(
                 interaction, r_min_map.get(pair, 0.0))
-            self.dipole_modulated_2b_r_max_map[interaction] = r_max_map.get(
-                interaction, r_max_map.get(pair, self.r_max_map.get(pair, 6.0)))
+            self.dipole_modulated_2b_r_max_map[interaction] = r_max
             self.dipole_modulated_2b_power_map[interaction] = float(
                 power_map.get(interaction, power_map.get(pair, default_power)))
             self.dipole_modulated_2b_eps_map[interaction] = float(
                 eps_map.get(interaction, eps_map.get(pair, default_eps)))
+            cutoff_on = cutoff_on_map.get(
+                interaction, cutoff_on_map.get(pair, default_cutoff_on))
+            if cutoff_on is None:
+                cutoff_on = density.default_cutoff_on(r_max)
+            self.dipole_modulated_2b_cutoff_on_map[interaction] = float(cutoff_on)
 
         interactions = []
         pair_map = {}
@@ -873,6 +1078,184 @@ class BSplineBasis:
             pair_map[key] = pair
         self.dipole_modulated_2b_interactions = interactions
         self.dipole_modulated_2b_pair_map = pair_map
+        self.r_cut = self.get_cutoff()
+
+    def update_bond_dipole_modulated_2b_settings(self,
+                                                 r_min_map=None,
+                                                 r_max_map=None,
+                                                 power_map=None,
+                                                 default_power=1.0,
+                                                 eps_map=None,
+                                                 default_eps=1e-8,
+                                                 cutoff_on_map=None,
+                                                 default_cutoff_on=None):
+        """Set bond-projected dipole-conditioned two-body metadata."""
+        if not self.bond_dipole_modulated_2b_enabled:
+            self.bond_dipole_modulated_2b_interactions = []
+            self.bond_dipole_modulated_2b_dipole_interactions = []
+            return
+        if r_min_map is None:
+            r_min_map = {}
+        if r_max_map is None:
+            r_max_map = {}
+        if power_map is None:
+            power_map = {}
+        if eps_map is None:
+            eps_map = {}
+        if cutoff_on_map is None:
+            cutoff_on_map = {}
+        r_min_map = format_density_map_keys(r_min_map)
+        r_max_map = format_density_map_keys(r_max_map)
+        power_map = format_density_map_keys(power_map)
+        eps_map = format_density_map_keys(eps_map)
+        cutoff_on_map = format_density_map_keys(cutoff_on_map)
+        self.bond_dipole_modulated_2b_dipole_interactions = \
+            density.get_density_interactions(self.element_list)
+        for interaction in self.bond_dipole_modulated_2b_dipole_interactions:
+            pair = interaction[1:]
+            r_max = r_max_map.get(
+                interaction,
+                r_max_map.get(pair, self.r_max_map.get(pair, 6.0)))
+            self.bond_dipole_modulated_2b_r_min_map[interaction] = \
+                r_min_map.get(interaction, r_min_map.get(pair, 0.0))
+            self.bond_dipole_modulated_2b_r_max_map[interaction] = r_max
+            self.bond_dipole_modulated_2b_power_map[interaction] = float(
+                power_map.get(interaction, power_map.get(pair, default_power)))
+            self.bond_dipole_modulated_2b_eps_map[interaction] = float(
+                eps_map.get(interaction, eps_map.get(pair, default_eps)))
+            cutoff_on = cutoff_on_map.get(
+                interaction, cutoff_on_map.get(pair, default_cutoff_on))
+            if cutoff_on is None:
+                cutoff_on = density.default_cutoff_on(r_max)
+            self.bond_dipole_modulated_2b_cutoff_on_map[interaction] = \
+                float(cutoff_on)
+
+        interactions = []
+        pair_map = {}
+        for pair in self.interactions_map[2]:
+            key = ("bond_dipole_modulated_2b", *pair)
+            interactions.append(key)
+            pair_map[key] = pair
+        self.bond_dipole_modulated_2b_interactions = interactions
+        self.bond_dipole_modulated_2b_pair_map = pair_map
+        self.r_cut = self.get_cutoff()
+
+    def update_tensor_modulated_2b_settings(self,
+                                            r_min_map=None,
+                                            r_max_map=None,
+                                            power_map=None,
+                                            default_power=1.0,
+                                            eps_map=None,
+                                            default_eps=1e-8,
+                                            cutoff_on_map=None,
+                                            default_cutoff_on=None):
+        """Set tensor-anisotropy-conditioned two-body metadata."""
+        if not self.tensor_modulated_2b_enabled:
+            self.tensor_modulated_2b_interactions = []
+            self.tensor_modulated_2b_tensor_interactions = []
+            return
+        if r_min_map is None:
+            r_min_map = {}
+        if r_max_map is None:
+            r_max_map = {}
+        if power_map is None:
+            power_map = {}
+        if eps_map is None:
+            eps_map = {}
+        if cutoff_on_map is None:
+            cutoff_on_map = {}
+        r_min_map = format_density_map_keys(r_min_map)
+        r_max_map = format_density_map_keys(r_max_map)
+        power_map = format_density_map_keys(power_map)
+        eps_map = format_density_map_keys(eps_map)
+        cutoff_on_map = format_density_map_keys(cutoff_on_map)
+        self.tensor_modulated_2b_tensor_interactions = \
+            density.get_density_interactions(self.element_list)
+        for interaction in self.tensor_modulated_2b_tensor_interactions:
+            pair = interaction[1:]
+            r_max = r_max_map.get(
+                interaction, r_max_map.get(pair, self.r_max_map.get(pair, 6.0)))
+            self.tensor_modulated_2b_r_min_map[interaction] = r_min_map.get(
+                interaction, r_min_map.get(pair, 0.0))
+            self.tensor_modulated_2b_r_max_map[interaction] = r_max
+            self.tensor_modulated_2b_power_map[interaction] = float(
+                power_map.get(interaction, power_map.get(pair, default_power)))
+            self.tensor_modulated_2b_eps_map[interaction] = float(
+                eps_map.get(interaction, eps_map.get(pair, default_eps)))
+            cutoff_on = cutoff_on_map.get(
+                interaction, cutoff_on_map.get(pair, default_cutoff_on))
+            if cutoff_on is None:
+                cutoff_on = density.default_cutoff_on(r_max)
+            self.tensor_modulated_2b_cutoff_on_map[interaction] = float(cutoff_on)
+
+        interactions = []
+        pair_map = {}
+        for pair in self.interactions_map[2]:
+            key = ("tensor_modulated_2b", *pair)
+            interactions.append(key)
+            pair_map[key] = pair
+        self.tensor_modulated_2b_interactions = interactions
+        self.tensor_modulated_2b_pair_map = pair_map
+        self.r_cut = self.get_cutoff()
+
+    def update_bond_tensor_modulated_2b_settings(self,
+                                                 r_min_map=None,
+                                                 r_max_map=None,
+                                                 power_map=None,
+                                                 default_power=1.0,
+                                                 eps_map=None,
+                                                 default_eps=1e-8,
+                                                 cutoff_on_map=None,
+                                                 default_cutoff_on=None):
+        """Set bond-projected tensor-conditioned two-body metadata."""
+        if not self.bond_tensor_modulated_2b_enabled:
+            self.bond_tensor_modulated_2b_interactions = []
+            self.bond_tensor_modulated_2b_tensor_interactions = []
+            return
+        if r_min_map is None:
+            r_min_map = {}
+        if r_max_map is None:
+            r_max_map = {}
+        if power_map is None:
+            power_map = {}
+        if eps_map is None:
+            eps_map = {}
+        if cutoff_on_map is None:
+            cutoff_on_map = {}
+        r_min_map = format_density_map_keys(r_min_map)
+        r_max_map = format_density_map_keys(r_max_map)
+        power_map = format_density_map_keys(power_map)
+        eps_map = format_density_map_keys(eps_map)
+        cutoff_on_map = format_density_map_keys(cutoff_on_map)
+        self.bond_tensor_modulated_2b_tensor_interactions = \
+            density.get_density_interactions(self.element_list)
+        for interaction in self.bond_tensor_modulated_2b_tensor_interactions:
+            pair = interaction[1:]
+            r_max = r_max_map.get(
+                interaction,
+                r_max_map.get(pair, self.r_max_map.get(pair, 6.0)))
+            self.bond_tensor_modulated_2b_r_min_map[interaction] = \
+                r_min_map.get(interaction, r_min_map.get(pair, 0.0))
+            self.bond_tensor_modulated_2b_r_max_map[interaction] = r_max
+            self.bond_tensor_modulated_2b_power_map[interaction] = float(
+                power_map.get(interaction, power_map.get(pair, default_power)))
+            self.bond_tensor_modulated_2b_eps_map[interaction] = float(
+                eps_map.get(interaction, eps_map.get(pair, default_eps)))
+            cutoff_on = cutoff_on_map.get(
+                interaction, cutoff_on_map.get(pair, default_cutoff_on))
+            if cutoff_on is None:
+                cutoff_on = density.default_cutoff_on(r_max)
+            self.bond_tensor_modulated_2b_cutoff_on_map[interaction] = \
+                float(cutoff_on)
+
+        interactions = []
+        pair_map = {}
+        for pair in self.interactions_map[2]:
+            key = ("bond_tensor_modulated_2b", *pair)
+            interactions.append(key)
+            pair_map[key] = pair
+        self.bond_tensor_modulated_2b_interactions = interactions
+        self.bond_tensor_modulated_2b_pair_map = pair_map
         self.r_cut = self.get_cutoff()
 
     def update_knots(self,
@@ -1097,11 +1480,39 @@ class BSplineBasis:
         dipole_modulated_2b_ridge = kwargs.pop(
             "ridge_dipole_modulated_2b", None)
         if dipole_modulated_2b_ridge is None:
-            dipole_modulated_2b_ridge = kwargs.pop("ridge_2D", 0.0)
+            dipole_modulated_2b_ridge = kwargs.pop(
+                "ridge_2p", kwargs.pop("ridge_2D", 0.0))
         dipole_modulated_2b_curvature = kwargs.pop(
             "curve_dipole_modulated_2b", None)
         if dipole_modulated_2b_curvature is None:
-            dipole_modulated_2b_curvature = kwargs.pop("curve_2D", 0.0)
+            dipole_modulated_2b_curvature = kwargs.pop(
+                "curve_2p", kwargs.pop("curve_2D", 0.0))
+        bond_dipole_modulated_2b_ridge = kwargs.pop(
+            "ridge_bond_dipole_modulated_2b", None)
+        if bond_dipole_modulated_2b_ridge is None:
+            bond_dipole_modulated_2b_ridge = kwargs.pop("ridge_2d", 0.0)
+        bond_dipole_modulated_2b_curvature = kwargs.pop(
+            "curve_bond_dipole_modulated_2b", None)
+        if bond_dipole_modulated_2b_curvature is None:
+            bond_dipole_modulated_2b_curvature = kwargs.pop("curve_2d", 0.0)
+        tensor_modulated_2b_ridge = kwargs.pop(
+            "ridge_tensor_modulated_2b", None)
+        if tensor_modulated_2b_ridge is None:
+            tensor_modulated_2b_ridge = kwargs.pop(
+                "ridge_2A", kwargs.pop("ridge_2a", 0.0))
+        tensor_modulated_2b_curvature = kwargs.pop(
+            "curve_tensor_modulated_2b", None)
+        if tensor_modulated_2b_curvature is None:
+            tensor_modulated_2b_curvature = kwargs.pop(
+                "curve_2A", kwargs.pop("curve_2a", 0.0))
+        bond_tensor_modulated_2b_ridge = kwargs.pop(
+            "ridge_bond_tensor_modulated_2b", None)
+        if bond_tensor_modulated_2b_ridge is None:
+            bond_tensor_modulated_2b_ridge = kwargs.pop("ridge_2q", 0.0)
+        bond_tensor_modulated_2b_curvature = kwargs.pop(
+            "curve_bond_tensor_modulated_2b", None)
+        if bond_tensor_modulated_2b_curvature is None:
+            bond_tensor_modulated_2b_curvature = kwargs.pop("curve_2q", 0.0)
         for k in kwargs:
             if k.lower()[0] == 'r':
                 ridge_map[int(re.sub('[^0-9]', '', k))] = float(kwargs[k])
@@ -1168,6 +1579,30 @@ class BSplineBasis:
                     pair,
                     ridge=float(dipole_modulated_2b_ridge),
                     curvature=float(dipole_modulated_2b_curvature))
+                matrices.append(matrix)
+        if self.bond_dipole_modulated_2b_enabled:
+            for interaction in self.bond_dipole_modulated_2b_interactions:
+                pair = self.bond_dipole_modulated_2b_pair_map[interaction]
+                matrix = self.get_regularization_matrix_2b(
+                    pair,
+                    ridge=float(bond_dipole_modulated_2b_ridge),
+                    curvature=float(bond_dipole_modulated_2b_curvature))
+                matrices.append(matrix)
+        if self.tensor_modulated_2b_enabled:
+            for interaction in self.tensor_modulated_2b_interactions:
+                pair = self.tensor_modulated_2b_pair_map[interaction]
+                matrix = self.get_regularization_matrix_2b(
+                    pair,
+                    ridge=float(tensor_modulated_2b_ridge),
+                    curvature=float(tensor_modulated_2b_curvature))
+                matrices.append(matrix)
+        if self.bond_tensor_modulated_2b_enabled:
+            for interaction in self.bond_tensor_modulated_2b_interactions:
+                pair = self.bond_tensor_modulated_2b_pair_map[interaction]
+                matrix = self.get_regularization_matrix_2b(
+                    pair,
+                    ridge=float(bond_tensor_modulated_2b_ridge),
+                    curvature=float(bond_tensor_modulated_2b_curvature))
                 matrices.append(matrix)
         # two- and three-body terms
         for degree in range(2, self.chemical_system.degree + 1):
@@ -1310,6 +1745,18 @@ class BSplineBasis:
             for interaction in self.dipole_modulated_2b_interactions:
                 pair = self.dipole_modulated_2b_pair_map[interaction]
                 partition_sizes.append(self.resolution_map[pair] + 3)
+        if self.bond_dipole_modulated_2b_enabled:
+            for interaction in self.bond_dipole_modulated_2b_interactions:
+                pair = self.bond_dipole_modulated_2b_pair_map[interaction]
+                partition_sizes.append(self.resolution_map[pair] + 3)
+        if self.tensor_modulated_2b_enabled:
+            for interaction in self.tensor_modulated_2b_interactions:
+                pair = self.tensor_modulated_2b_pair_map[interaction]
+                partition_sizes.append(self.resolution_map[pair] + 3)
+        if self.bond_tensor_modulated_2b_enabled:
+            for interaction in self.bond_tensor_modulated_2b_interactions:
+                pair = self.bond_tensor_modulated_2b_pair_map[interaction]
+                partition_sizes.append(self.resolution_map[pair] + 3)
         for degree in range(2, self.chemical_system.degree + 1):
             interactions = self.chemical_system.interactions_map[degree]
             for interaction in interactions:
@@ -1394,7 +1841,28 @@ class BSplineBasis:
                 _, *pair = interaction
                 size = sizes[interaction]
                 pair_label = "".join(pair)
-                names = [f"2D_{pair_label}{i}" for i in range(size)]
+                names = [f"2p_{pair_label}{i}" for i in range(size)]
+                feature_columns.extend(names)
+        if self.bond_dipole_modulated_2b_enabled:
+            for interaction in self.bond_dipole_modulated_2b_interactions:
+                _, *pair = interaction
+                size = sizes[interaction]
+                pair_label = "".join(pair)
+                names = [f"2d_{pair_label}{i}" for i in range(size)]
+                feature_columns.extend(names)
+        if self.tensor_modulated_2b_enabled:
+            for interaction in self.tensor_modulated_2b_interactions:
+                _, *pair = interaction
+                size = sizes[interaction]
+                pair_label = "".join(pair)
+                names = [f"2A_{pair_label}{i}" for i in range(size)]
+                feature_columns.extend(names)
+        if self.bond_tensor_modulated_2b_enabled:
+            for interaction in self.bond_tensor_modulated_2b_interactions:
+                _, *pair = interaction
+                size = sizes[interaction]
+                pair_label = "".join(pair)
+                names = [f"2q_{pair_label}{i}" for i in range(size)]
                 feature_columns.extend(names)
         for n in range(2, self.degree + 1):
             for interaction in self.interactions_map[n]:
@@ -1461,6 +1929,42 @@ class BSplineBasis:
                 _ = component_offsets[interaction]
         if self.dipole_modulated_2b_enabled:
             for interaction in self.dipole_modulated_2b_interactions:
+                offset = component_offsets[interaction]
+                size = component_sizes[interaction]
+                for trim_idx in range(n_lead[2]):
+                    idx = offset + trim_idx
+                    col_idx.append(idx)
+                    frozen_c.append(value)
+                for trim_idx in range(1, n_trail[2] + 1):
+                    idx = offset + size - trim_idx
+                    col_idx.append(idx)
+                    frozen_c.append(value)
+        if self.bond_dipole_modulated_2b_enabled:
+            for interaction in self.bond_dipole_modulated_2b_interactions:
+                offset = component_offsets[interaction]
+                size = component_sizes[interaction]
+                for trim_idx in range(n_lead[2]):
+                    idx = offset + trim_idx
+                    col_idx.append(idx)
+                    frozen_c.append(value)
+                for trim_idx in range(1, n_trail[2] + 1):
+                    idx = offset + size - trim_idx
+                    col_idx.append(idx)
+                    frozen_c.append(value)
+        if self.tensor_modulated_2b_enabled:
+            for interaction in self.tensor_modulated_2b_interactions:
+                offset = component_offsets[interaction]
+                size = component_sizes[interaction]
+                for trim_idx in range(n_lead[2]):
+                    idx = offset + trim_idx
+                    col_idx.append(idx)
+                    frozen_c.append(value)
+                for trim_idx in range(1, n_trail[2] + 1):
+                    idx = offset + size - trim_idx
+                    col_idx.append(idx)
+                    frozen_c.append(value)
+        if self.bond_tensor_modulated_2b_enabled:
+            for interaction in self.bond_tensor_modulated_2b_interactions:
                 offset = component_offsets[interaction]
                 size = component_sizes[interaction]
                 for trim_idx in range(n_lead[2]):
@@ -1597,7 +2101,17 @@ class BSplineBasis:
             "3rho": "density_modulated_3b",
             "dipole_modulated_pair": "dipole_modulated_2b",
             "2D": "dipole_modulated_2b",
-            "2d": "dipole_modulated_2b",
+            "2p": "dipole_modulated_2b",
+            "bond_dipole_modulated_pair": "bond_dipole_modulated_2b",
+            "bond_dipole_modulated_2body": "bond_dipole_modulated_2b",
+            "2d": "bond_dipole_modulated_2b",
+            "tensor_modulated_pair": "tensor_modulated_2b",
+            "tensor_modulated_2body": "tensor_modulated_2b",
+            "2A": "tensor_modulated_2b",
+            "2a": "tensor_modulated_2b",
+            "bond_tensor_modulated_pair": "bond_tensor_modulated_2b",
+            "bond_tensor_modulated_2body": "bond_tensor_modulated_2b",
+            "2q": "bond_tensor_modulated_2b",
         }
         groups = {aliases.get(group, group) for group in groups}
         sizes, offsets = self.get_interaction_partitions()
@@ -1615,6 +2129,11 @@ class BSplineBasis:
             ("density_modulated_2b", "density_modulated_2b_interactions"),
             ("density_modulated_3b", "density_modulated_3b_interactions"),
             ("dipole_modulated_2b", "dipole_modulated_2b_interactions"),
+            ("bond_dipole_modulated_2b",
+             "bond_dipole_modulated_2b_interactions"),
+            ("tensor_modulated_2b", "tensor_modulated_2b_interactions"),
+            ("bond_tensor_modulated_2b",
+             "bond_tensor_modulated_2b_interactions"),
         ]
         for group, attr in descriptor_groups:
             if group not in groups:
@@ -1703,6 +2222,14 @@ def get_knot_spacer(knot_strategy):
 def format_alpha_label(alpha: float) -> str:
     """Format a density-modulation exponent for stable interaction keys."""
     return f"a{float(alpha):g}".replace("-", "m").replace(".", "p")
+
+
+def smooth_density_cutoff_mode(mode) -> str:
+    """Force local density-like descriptors to use a smooth cutoff."""
+    mode = str(mode or "quintic").lower()
+    if mode in {"hard", "none", "step"}:
+        return "quintic"
+    return mode
 
 
 def generate_basis_functions(knot_subintervals):

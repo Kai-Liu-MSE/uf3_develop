@@ -47,6 +47,8 @@ CHG*
 AECCAR*
 vasprun.xml
 OUTCAR
+!tests/data/vasp_md/vasprun.xml
+!tests/data/vasp_relax/vasprun.xml
 
 # Local experiment/output folders
 Co_PRM_test/

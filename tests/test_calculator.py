@@ -118,6 +118,45 @@ class TestCalculator:
             geom_minus.get_potential_energy()) / (2 * step)
         assert np.isclose(forces[1, 0], finite_difference)
 
+    def test_density_modulated_2b_periodic_force_consistency(self):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 3.0},
+            resolution_map={('W', 'W'): 6},
+            density_modulated_2b_enabled=True,
+            density_modulated_2b_alphas=[0.5],
+            density_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            density_modulated_2b_r_max_map={('W', 'W'): 3.0},
+            density_modulated_2b_power=1.0,
+            density_modulated_2b_rho_bulk_map={('W', 'W'): 0.5})
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        model.coefficients = np.zeros(sum(bspline_config.partition_sizes))
+        key = bspline_config.density_modulated_2b_interactions[0]
+        offset = bspline_config.get_interaction_partitions()[1][key]
+        model.coefficients[offset + 3] = 1.0
+        calc = calculator.UFCalculator(model)
+
+        geom = ase.Atoms('W2',
+                         positions=[[0.1, 0.2, 0.3], [2.1, 1.5, 0.5]],
+                         cell=[4.0, 4.0, 4.0],
+                         pbc=True)
+        geom.calc = calc
+        forces = geom.get_forces()
+        step = 1e-6
+        geom_plus = geom.copy()
+        geom_minus = geom.copy()
+        geom_plus.positions[1, 0] += step
+        geom_minus.positions[1, 0] -= step
+        geom_plus.calc = calc
+        geom_minus.calc = calc
+        finite_difference = -(
+            geom_plus.get_potential_energy() -
+            geom_minus.get_potential_energy()) / (2 * step)
+        assert np.isclose(forces[1, 0], finite_difference, atol=1e-6)
+
     def test_density_modulated_2b_group_freezing(self):
         element_list = ['W']
         chemical_system = composition.ChemicalSystem(element_list)
@@ -155,7 +194,7 @@ class TestCalculator:
         key = bspline_config.dipole_modulated_2b_interactions[0]
         offset = bspline_config.get_interaction_partitions()[1][key]
         model.coefficients[offset + 3] = 1.0
-        model_path = tmp_path / "model_2D.json"
+        model_path = tmp_path / "model_2p.json"
         model.to_json(str(model_path))
         model = least_squares.WeightedLinearModel.from_json(str(model_path))
         calc = calculator.UFCalculator(model)
@@ -192,11 +231,197 @@ class TestCalculator:
             dipole_modulated_2b_r_min_map={('W', 'W'): 0.1},
             dipole_modulated_2b_r_max_map={('W', 'W'): 5.0})
         model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
-        idx_2d = bspline_config.get_feature_group_indices("2D")
+        idx_2d = bspline_config.get_feature_group_indices("2p")
         idx_base = bspline_config.get_feature_group_indices(["1b", "2b"])
         model.freeze_feature_groups(["1b", "2b"])
         assert set(idx_base).issubset(set(model.col_idx))
         assert not set(idx_2d).issubset(set(model.col_idx))
+
+    def test_bond_dipole_modulated_2b_force_consistency(self, tmp_path):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 5.0},
+            resolution_map={('W', 'W'): 6},
+            bond_dipole_modulated_2b_enabled=True,
+            bond_dipole_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            bond_dipole_modulated_2b_r_max_map={('W', 'W'): 5.0},
+            bond_dipole_modulated_2b_power=1.0,
+            bond_dipole_modulated_2b_eps=1e-8)
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        model.coefficients = np.zeros(sum(bspline_config.partition_sizes))
+        key = bspline_config.bond_dipole_modulated_2b_interactions[0]
+        offset = bspline_config.get_interaction_partitions()[1][key]
+        model.coefficients[offset + 3] = 1.0
+        model_path = tmp_path / "model_2d.json"
+        model.to_json(str(model_path))
+        model = least_squares.WeightedLinearModel.from_json(str(model_path))
+        calc = calculator.UFCalculator(model)
+
+        geom = ase.Atoms('W4',
+                         positions=[[0.0, 0.0, 0.0],
+                                    [2.0, 0.1, 0.0],
+                                    [0.3, 2.3, 0.2],
+                                    [1.5, 1.6, 1.7]],
+                         pbc=False,
+                         cell=None)
+        geom.calc = calc
+        forces = geom.get_forces()
+        step = 1e-6
+        geom_plus = geom.copy()
+        geom_minus = geom.copy()
+        geom_plus.positions[1, 0] += step
+        geom_minus.positions[1, 0] -= step
+        geom_plus.calc = calc
+        geom_minus.calc = calc
+        finite_difference = -(
+            geom_plus.get_potential_energy() -
+            geom_minus.get_potential_energy()) / (2 * step)
+        assert np.isclose(forces[1, 0], finite_difference, rtol=1e-5, atol=1e-7)
+
+    def test_bond_dipole_modulated_2b_group_freezing(self):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 5.0},
+            resolution_map={('W', 'W'): 6},
+            bond_dipole_modulated_2b_enabled=True,
+            bond_dipole_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            bond_dipole_modulated_2b_r_max_map={('W', 'W'): 5.0})
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        idx_2d = bspline_config.get_feature_group_indices("2d")
+        idx_base = bspline_config.get_feature_group_indices(["1b", "2b"])
+        model.freeze_feature_groups(["1b", "2b"])
+        assert set(idx_base).issubset(set(model.col_idx))
+        assert not set(idx_2d).issubset(set(model.col_idx))
+
+    def test_tensor_modulated_2b_force_consistency(self, tmp_path):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 5.0},
+            resolution_map={('W', 'W'): 6},
+            tensor_modulated_2b_enabled=True,
+            tensor_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            tensor_modulated_2b_r_max_map={('W', 'W'): 5.0},
+            tensor_modulated_2b_power=1.0,
+            tensor_modulated_2b_eps=1e-8)
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        model.coefficients = np.zeros(sum(bspline_config.partition_sizes))
+        key = bspline_config.tensor_modulated_2b_interactions[0]
+        offset = bspline_config.get_interaction_partitions()[1][key]
+        model.coefficients[offset + 3: offset + 7] = [0.2, -0.1, 0.3, -0.15]
+        model_path = tmp_path / "model_2A.json"
+        model.to_json(str(model_path))
+        model = least_squares.WeightedLinearModel.from_json(str(model_path))
+        calc = calculator.UFCalculator(model)
+
+        geom = ase.Atoms('W4',
+                         positions=[[0.0, 0.0, 0.0],
+                                    [2.0, 0.1, 0.0],
+                                    [0.3, 2.3, 0.2],
+                                    [1.5, 1.6, 1.7]],
+                         pbc=False,
+                         cell=None)
+        geom.calc = calc
+        forces = geom.get_forces()
+        step = 1e-6
+        geom_plus = geom.copy()
+        geom_minus = geom.copy()
+        geom_plus.positions[1, 0] += step
+        geom_minus.positions[1, 0] -= step
+        geom_plus.calc = calc
+        geom_minus.calc = calc
+        finite_difference = -(
+            geom_plus.get_potential_energy() -
+            geom_minus.get_potential_energy()) / (2 * step)
+        assert np.isclose(forces[1, 0], finite_difference, rtol=1e-5, atol=1e-7)
+
+    def test_tensor_modulated_2b_group_freezing(self):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 5.0},
+            resolution_map={('W', 'W'): 6},
+            tensor_modulated_2b_enabled=True,
+            tensor_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            tensor_modulated_2b_r_max_map={('W', 'W'): 5.0})
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        idx_2a = bspline_config.get_feature_group_indices("2A")
+        idx_base = bspline_config.get_feature_group_indices(["1b", "2b"])
+        model.freeze_feature_groups(["1b", "2b"])
+        assert set(idx_base).issubset(set(model.col_idx))
+        assert not set(idx_2a).issubset(set(model.col_idx))
+
+    def test_bond_tensor_modulated_2b_force_consistency(self, tmp_path):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 5.0},
+            resolution_map={('W', 'W'): 6},
+            bond_tensor_modulated_2b_enabled=True,
+            bond_tensor_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            bond_tensor_modulated_2b_r_max_map={('W', 'W'): 5.0},
+            bond_tensor_modulated_2b_power=1.0,
+            bond_tensor_modulated_2b_eps=1e-8)
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        model.coefficients = np.zeros(sum(bspline_config.partition_sizes))
+        key = bspline_config.bond_tensor_modulated_2b_interactions[0]
+        offset = bspline_config.get_interaction_partitions()[1][key]
+        model.coefficients[offset + 3: offset + 7] = [0.2, -0.1, 0.3, -0.15]
+        model_path = tmp_path / "model_2q.json"
+        model.to_json(str(model_path))
+        model = least_squares.WeightedLinearModel.from_json(str(model_path))
+        calc = calculator.UFCalculator(model)
+
+        geom = ase.Atoms('W4',
+                         positions=[[0.0, 0.0, 0.0],
+                                    [2.0, 0.1, 0.0],
+                                    [0.3, 2.3, 0.2],
+                                    [1.5, 1.6, 1.7]],
+                         pbc=False,
+                         cell=None)
+        geom.calc = calc
+        forces = geom.get_forces()
+        step = 1e-6
+        geom_plus = geom.copy()
+        geom_minus = geom.copy()
+        geom_plus.positions[1, 0] += step
+        geom_minus.positions[1, 0] -= step
+        geom_plus.calc = calc
+        geom_minus.calc = calc
+        finite_difference = -(
+            geom_plus.get_potential_energy() -
+            geom_minus.get_potential_energy()) / (2 * step)
+        assert np.isclose(forces[1, 0], finite_difference, rtol=1e-5, atol=1e-7)
+
+    def test_bond_tensor_modulated_2b_group_freezing(self):
+        element_list = ['W']
+        chemical_system = composition.ChemicalSystem(element_list)
+        bspline_config = bspline.BSplineBasis(
+            chemical_system,
+            r_min_map={('W', 'W'): 0.5},
+            r_max_map={('W', 'W'): 5.0},
+            resolution_map={('W', 'W'): 6},
+            bond_tensor_modulated_2b_enabled=True,
+            bond_tensor_modulated_2b_r_min_map={('W', 'W'): 0.1},
+            bond_tensor_modulated_2b_r_max_map={('W', 'W'): 5.0})
+        model = least_squares.WeightedLinearModel(bspline_config=bspline_config)
+        idx_2q = bspline_config.get_feature_group_indices("2q")
+        idx_base = bspline_config.get_feature_group_indices(["1b", "2b"])
+        model.freeze_feature_groups(["1b", "2b"])
+        assert set(idx_base).issubset(set(model.col_idx))
+        assert not set(idx_2q).issubset(set(model.col_idx))
 
     def test_unary_trimer(self):
         geom = ase.Atoms("W3",
